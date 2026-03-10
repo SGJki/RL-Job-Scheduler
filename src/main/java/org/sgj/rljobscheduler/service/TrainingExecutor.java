@@ -39,7 +39,7 @@ public class TrainingExecutor {
         TrainingTask task = taskMapper.selectById(taskId);
         if (task == null) return CompletableFuture.completedFuture(0.0);
         Process process = null;
-        BufferedReader reader = null;
+
 
         // 2. 构建 Python 命令
         // python scripts/train.py --taskId xxx --algo PPO --episodes 1000 --lr 0.001
@@ -59,27 +59,26 @@ public class TrainingExecutor {
 
         ProcessBuilder pb = new ProcessBuilder(command);
         pb.directory(new File("C:\\Users\\13253\\dataDisk\\java_code\\Welcome\\RL-Job-Scheduler"));
-        pb.redirectErrorStream(true); // 合并 stderr 到 stdout
+        // 3. 日志分流配置
+        // 确保 logs 目录存在
+        File logDir = new File("logs");
+        if (!logDir.exists()) logDir.mkdirs();
+
+        // 标准输出 (stdout) -> logs/task_{id}.log
+        File outFile = new File(logDir, "task_" + taskId + ".log");
+        pb.redirectOutput(outFile);
+
+        // 错误输出 (stderr) -> logs/task_{id}_error.log
+        File errFile = new File(logDir, "task_" + taskId + "_error.log");
+        pb.redirectError(errFile);
 
         // 3. 启动进程
         try {
             process = pb.start();
-            reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-            String line;
-
-            while ((line = reader.readLine()) != null) {
-                System.out.println("[Process Output] " + line);
-
-                // 解析关键结果: "FINAL_REWARD:105.50"
-                if (line.startsWith("FINAL_REWARD:")) {
-                    try {
-                        finalReward = Double.parseDouble(line.split(":")[1]);
-                    } catch (NumberFormatException e) {
-                        System.err.println("解析 Reward 失败: " + line);
-                    }
-                }}
+            System.out.println(">>> [Process] 日志文件已创建: " + outFile.getAbsolutePath());
             int exitCode = process.waitFor();
             if (exitCode == 0) {
+                finalReward = parseRewardFromLog(outFile);
                 System.out.println(">>> [后台线程] Python 脚本执行成功");
                 // 更新数据库 (需要重新查询以确保数据最新)
                 TrainingTask updateTask = taskMapper.selectById(taskId);
@@ -91,6 +90,7 @@ public class TrainingExecutor {
                 }}
              else {
                 System.err.println(">>> [后台线程] Python 脚本异常退出, Code: " + exitCode);
+                System.err.println(">>> [Error Log] 请查看: " + errFile.getAbsolutePath());
                 updateStatus(taskId, "FAILED");
             }
         }
@@ -98,9 +98,6 @@ public class TrainingExecutor {
             e.printStackTrace();
         }finally {
             // 4. 释放资源
-            if(reader!= null){
-            try {
-                reader.close();}catch (IOException e) {e.printStackTrace();}}
             if(process!= null){
                 process.destroy();
             }}
@@ -111,7 +108,27 @@ public class TrainingExecutor {
 
         return CompletableFuture.completedFuture(finalReward);
     }
-
+    /**
+     * 辅助方法：从日志文件中读取 FINAL_REWARD
+     */
+    private double parseRewardFromLog(File logFile) {
+        double reward = 0.0;
+        try (BufferedReader reader = new BufferedReader(new java.io.FileReader(logFile))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.startsWith("FINAL_REWARD:")) {
+                    try {
+                        reward = Double.parseDouble(line.split(":")[1]);
+                    } catch (NumberFormatException e) {
+                        // ignore
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return reward;
+    }
     private void updateStatus(String taskId, String status) {
         TrainingTask task = taskMapper.selectById(taskId);
         if (task != null) {
