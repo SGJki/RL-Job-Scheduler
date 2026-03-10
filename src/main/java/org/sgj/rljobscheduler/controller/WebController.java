@@ -37,4 +37,12 @@ public class WebController {
         return "redirect:/";
     }
 
+    // 局部刷新接口：只返回表格片段 (Fragment)
+    @GetMapping("/tasks/fragment")
+    public String getTaskFragment(Model model) {
+        model.addAttribute("tasks", trainingService.getAllTasks());
+        // 只渲染 index.html 中的 "task-list" 片段
+        return "index :: task-list";
+    }
+
 }

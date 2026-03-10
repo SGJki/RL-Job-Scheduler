@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>RL Training Dashboard</title>
+    <!-- 使用简单的 Bootstrap CDN 美化页面 -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container { max-width: 900px; margin-top: 30px; }
+        .card { margin-bottom: 20px; }
+        .status-PENDING { color: #ffc107; font-weight: bold; }
+        .status-RUNNING { color: #0d6efd; font-weight: bold; }
+        .status-COMPLETED { color: #198754; font-weight: bold; }
+        .status-FAILED { color: #dc3545; font-weight: bold; }
+    </style>
+    <!-- 引入 jQuery 方便做 AJAX -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        $(document).ready(function() {
+            // 每 3 秒执行一次局部刷新
+            setInterval(function() {
+                // AJAX 请求返回的是完整的 <tbody>...</tbody>
+                // 我们使用 replaceWith 直接把旧的 <tbody> 替换掉
+                $.get('/tasks/fragment', function(data) {
+                    $('#task-table-body').replaceWith(data);
+                });
+            }, 3000);
+        });
+    </script>
+</head>
+<body>
+
+<div class="container">
+    <h1 class="text-center mb-4">🤖 RL Training Dashboard</h1>
+
+    <!-- 1. 提交新任务表单 -->
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            🚀 Create New Training Task
+        </div>
+        <div class="card-body">
+            <form action="#" th:action="@{/submit}" th:object="${request}" method="post">
+                <div class="row mb-3">
+                    <div class="col-md-4">
+                        <label class="form-label">Algorithm</label>
+                        <select class="form-select" th:field="*{algorithm}">
+                            <option value="PPO">PPO (Proximal Policy Optimization)</option>
+                            <option value="DQN">DQN (Deep Q-Network)</option>
+                            <option value="A2C">A2C (Advantage Actor-Critic)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Episodes</label>
+                        <input type="number" class="form-control" th:field="*{episodes}" value="1000" min="100" max="10000">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Learning Rate</label>
+                        <input type="number" step="0.0001" class="form-control" th:field="*{learningRate}" value="0.001">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-success w-100">Start Training</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- 2. 任务列表表格 -->
+    <div class="card">
+        <div class="card-header bg-secondary text-white">
+            📊 Task History (Auto-refresh every 5s)
+        </div>
+        <div class="card-body">
+            <table class="table table-hover table-striped">
+                <thead>
+                <tr>
+                    <th>Task ID</th>
+                    <th>Algorithm</th>
+                    <th>Episodes</th>
+                    <th>Learning Rate</th>
+                    <th>Status</th>
+                    <th>Final Reward</th>
+                    <th>Created At</th>
+                </tr>
+                </thead>
+                <!-- 给 tbody 加个 ID，方便 jQuery 替换 -->
+                <tbody id="task-table-body" th:fragment="task-list">
+                <tr th:each="task : ${tasks}">
+                    <td th:text="${task.id}">12345</td>
+                    <td th:text="${task.algorithm}">PPO</td>
+                    <td th:text="${task.episodes}">1000</td>
+                    <td th:text="${task.learningRate}">0.001</td>
+                    <td>
+                            <span th:text="${task.status}"
+                                  th:class="'status-' + ${task.status}">COMPLETED</span>
+                    </td>
+                    <td th:text="${#numbers.formatDecimal(task.finalReward, 1, 2)}">95.50</td>
+                    <td th:text="${#temporals.format(task.createdAt, 'yyyy-MM-dd HH:mm:ss')}">2023-10-01 12:00:00</td>
+                </tr>
+                <tr th:if="${#lists.isEmpty(tasks)}">
+                    <td colspan="7" class="text-center text-muted">No tasks found. Start one above!</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

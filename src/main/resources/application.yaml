@@ -17,6 +17,10 @@ spring:
       init:
         mode: always
         platform: mysql
+  thymeleaf:
+    cache: false
+    mode: HTML5
+    encoding: UTF-8
 mybatis-plus:
   configuration:
     auto-mapping-behavior: full
