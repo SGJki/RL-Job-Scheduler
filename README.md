@@ -43,7 +43,9 @@ this is a web Service for RL training manager
 
 - [ ] **Phase 5: 真实算法集成 (Real RL Integration)**
     - Java `ProcessBuilder` 调用 Python 脚本
-    - 实时日志流处理
+    - 实时日志流处理 (stdout/stderr 合并)
+    - 共享日志文件 (`logs/training.log`)
+    - 结果解析与数据库回写
 
 ## 🛠️ 技术栈 (Tech Stack)
 
@@ -51,6 +53,7 @@ this is a web Service for RL training manager
 - **Database**: MySQL 8.0.33
 - **ORM**: MyBatis-Plus 3.5.15
 - **Frontend**: Thymeleaf, Bootstrap 5, jQuery 3.6
+- **Integration**: Python 3 (ProcessBuilder)
 - **Build Tool**: Maven
 
 ## 📦 快速开始 (Quick Start)
@@ -59,6 +62,12 @@ this is a web Service for RL training manager
 - JDK 1.17+
 - Maven 3.6+
 - MySQL 8.0+ (创建数据库 `testdb`)
+- uv
+
+同步script中训练脚本python环境
+```bash
+uv sync
+```
 
 ### 2. 数据库配置
 修改 `src/main/resources/application.properties`:
@@ -76,6 +85,10 @@ mvn spring-boot:run
 ### 4. 访问页面
 打开浏览器访问: [http://localhost:8081](http://localhost:8080)
 
+### 5. 查看日志
+训练任务的详细日志（包括 Python 脚本输出）会保存在项目根目录的 `logs/training.log` 文件中。
+
+
 ## 📂 项目结构
 ```
 src/main/java/org/example/demo/
@@ -86,6 +99,9 @@ src/main/java/org/example/demo/
 ├── mapper/             # MyBatis Mapper 接口
 ├── service/            # 业务逻辑 (TrainingService, TrainingExecutor)
 └── DemoApplication.java # 启动类
+
+scripts/
+└── train.py            # Python 训练模拟脚本
 ```
 
 ## 📝 API 文档 (Legacy)
