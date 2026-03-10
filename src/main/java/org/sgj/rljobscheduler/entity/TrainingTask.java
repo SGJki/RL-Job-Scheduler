@@ -1,8 +1,9 @@
 package org.sgj.rljobscheduler.entity;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
+
 import java.time.LocalDateTime;
 
 /**
@@ -17,11 +18,11 @@ import java.time.LocalDateTime;
  *   ...
  * )
  */
-@Entity
-@Table(name = "training_task")
+
+@TableName("training_task")
 public class TrainingTask {
 
-    @Id
+    @TableId
     private String id; // 任务 ID (主键)
 
     private String algorithm;

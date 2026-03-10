@@ -1,6 +1,6 @@
 package org.sgj.rljobscheduler.service;
 
-import org.sgj.rljobscheduler.repository.TaskRepository;
+import org.sgj.rljobscheduler.mapper.TrainingTaskMapper;
 import org.sgj.rljobscheduler.entity.TrainingTask;
 import org.sgj.rljobscheduler.dto.TrainingRequest;
 import org.sgj.rljobscheduler.dto.TrainingResult;
@@ -16,7 +16,7 @@ import java.util.concurrent.CompletableFuture;
 public class TrainingService {
 
     @Autowired
-    private TaskRepository taskRepository;
+    private TrainingTaskMapper taskMapper;
 
     @Autowired
     private TrainingExecutor trainingExecutor;
@@ -36,7 +36,7 @@ public class TrainingService {
                 episodes, learningRate);
 
         // 存库! 状态 = PENDING
-        taskRepository.save(task);
+        taskMapper.insert(task);
         System.out.println(">>> [TrainingService] 任务已创建,准备后台执行: " + taskId);
 
         CompletableFuture<Double> future = trainingExecutor.executeTraining(taskId, episodes);
@@ -45,7 +45,7 @@ public class TrainingService {
             System.out.println(">>> [TrainingService]"+ taskId + " 任务失败, 错误信息: " + e.getMessage());
             task.setStatus("FAILED");
             task.setErrorMessage(e.getMessage());
-            taskRepository.save(task);
+            taskMapper.insert(task);
             return null;
         });
         future.thenAccept(reward -> {
@@ -60,6 +60,6 @@ public class TrainingService {
      * 查询所有历史任务
      */
     public List<TrainingTask> getAllTasks() {
-        return taskRepository.findAll();
+        return taskMapper.selectList(null);
     }
 }

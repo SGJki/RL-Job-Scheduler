@@ -1,7 +1,7 @@
 package org.sgj.rljobscheduler.service;
 
 import org.sgj.rljobscheduler.entity.TrainingTask;
-import org.sgj.rljobscheduler.repository.TaskRepository;
+import org.sgj.rljobscheduler.mapper.TrainingTaskMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
@@ -17,7 +17,7 @@ import java.util.concurrent.CompletableFuture;
 public class TrainingExecutor {
 
     @Autowired
-    private TaskRepository taskRepository;
+    private TrainingTaskMapper taskMapper;
 
     @Async // 关键注解：告诉 Spring 这是一个异步方法，要丢给线程池跑
     public CompletableFuture<Double> executeTraining(String taskId, int episodes) {
@@ -39,7 +39,7 @@ public class TrainingExecutor {
 
 
         // 4. 更新状态为 COMPLETED
-        TrainingTask task = taskRepository.findById(taskId).orElse(null);
+        TrainingTask task = taskMapper.selectById(taskId);
         if (task != null) {
             if (error) {
                 task.setErrorMessage("任务执行失败"+errorMessage);
@@ -47,17 +47,17 @@ public class TrainingExecutor {
             task.setStatus("COMPLETED");
             task.setFinalReward(mockReward);
             task.setCompletedAt(LocalDateTime.now());
-            taskRepository.save(task);
+            taskMapper.updateById(task);
             System.out.println(">>> [后台线程] 任务完成: " + taskId);
         }
         return CompletableFuture.completedFuture(mockReward);
     }
 
     private void updateStatus(String taskId, String status) {
-        TrainingTask task = taskRepository.findById(taskId).orElse(null);
+        TrainingTask task = taskMapper.selectById(taskId);
         if (task != null) {
             task.setStatus(status);
-            taskRepository.save(task);
+            taskMapper.updateById(task);
         }
     }
 }
