@@ -17,14 +17,24 @@
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
         $(document).ready(function() {
-            // 每 3 秒执行一次局部刷新
-            setInterval(function() {
-                // AJAX 请求返回的是完整的 <tbody>...</tbody>
-                // 我们使用 replaceWith 直接把旧的 <tbody> 替换掉
-                $.get('/tasks/fragment', function(data) {
-                    $('#task-table-body').replaceWith(data);
+            var currentPage = 1;
+            function refreshTable() {
+                $.get('/tasks/fragment?page=' + currentPage, function(data) {
+                    $('#task-table-container').replaceWith(data);
                 });
-            }, 3000);
+            }
+
+            // 每 3 秒执行一次局部刷新
+            setInterval(refreshTable, 5000);
+            // 处理分页点击事件 (使用事件委托，因为分页按钮是动态加载的)
+            $(document).on('click', '.page-link', function(e) {
+                e.preventDefault();
+                var page = $(this).data('page');
+                if (page) {
+                    currentPage = page;
+                    refreshTable();
+                }
+            });
         });
     </script>
 </head>
@@ -69,37 +79,59 @@
             📊 Task History (Auto-refresh every 5s)
         </div>
         <div class="card-body">
-            <table class="table table-hover table-striped">
-                <thead>
-                <tr>
-                    <th>Task ID</th>
-                    <th>Algorithm</th>
-                    <th>Episodes</th>
-                    <th>Learning Rate</th>
-                    <th>Status</th>
-                    <th>Final Reward</th>
-                    <th>Created At</th>
-                </tr>
-                </thead>
-                <!-- 给 tbody 加个 ID，方便 jQuery 替换 -->
-                <tbody id="task-table-body" th:fragment="task-list">
-                <tr th:each="task : ${tasks}">
-                    <td th:text="${task.id}">12345</td>
-                    <td th:text="${task.algorithm}">PPO</td>
-                    <td th:text="${task.episodes}">1000</td>
-                    <td th:text="${task.learningRate}">0.001</td>
-                    <td>
-                            <span th:text="${task.status}"
-                                  th:class="'status-' + ${task.status}">COMPLETED</span>
-                    </td>
-                    <td th:text="${#numbers.formatDecimal(task.finalReward, 1, 2)}">95.50</td>
-                    <td th:text="${#temporals.format(task.createdAt, 'yyyy-MM-dd HH:mm:ss')}">2023-10-01 12:00:00</td>
-                </tr>
-                <tr th:if="${#lists.isEmpty(tasks)}">
-                    <td colspan="7" class="text-center text-muted">No tasks found. Start one above!</td>
-                </tr>
-                </tbody>
-            </table>
+            <!-- 包裹表格和分页条的容器，用于整体替换 -->
+            <div id="task-table-container" th:fragment="task-list">
+                <table class="table table-hover table-striped">
+                    <thead>
+                    <tr>
+                        <th>Task ID</th>
+                        <th>Algorithm</th>
+                        <th>Episodes</th>
+                        <th>Learning Rate</th>
+                        <th>Status</th>
+                        <th>Final Reward</th>
+                        <th>Created At</th>
+                    </tr>
+                    </thead>
+                    <tbody id="task-table-body">
+                    <tr th:each="task : ${taskPage.records}">
+                        <td th:text="${task.id}">12345</td>
+                        <td th:text="${task.algorithm}">PPO</td>
+                        <td th:text="${task.episodes}">1000</td>
+                        <td th:text="${task.learningRate}">0.001</td>
+                        <td>
+                                <span th:text="${task.status}"
+                                      th:class="'status-' + ${task.status}">COMPLETED</span>
+                        </td>
+                        <td th:text="${#numbers.formatDecimal(task.finalReward, 1, 2)}">95.50</td>
+                        <td th:text="${#temporals.format(task.createdAt, 'yyyy-MM-dd HH:mm:ss')}">2023-10-01 12:00:00</td>
+                    </tr>
+                    <tr th:if="${#lists.isEmpty(taskPage.records)}">
+                        <td colspan="7" class="text-center text-muted">No tasks found. Start one above!</td>
+                    </tr>
+                    </tbody>
+                </table>
+
+                <!-- 分页导航栏 -->
+                <nav aria-label="Page navigation" th:if="${taskPage.total > 0}">
+                    <ul class="pagination justify-content-center">
+                        <!-- 上一页 -->
+                        <li class="page-item" th:classappend="${taskPage.current == 1} ? 'disabled'">
+                            <a class="page-link" href="#" th:data-page="${taskPage.current - 1}">Previous</a>
+                        </li>
+
+                        <!-- 页码 (简单起见，显示当前页) -->
+                        <li class="page-item active">
+                            <span class="page-link" th:text="'Page ' + ${taskPage.current} + ' of ' + ${taskPage.pages}">1 of 5</span>
+                        </li>
+
+                        <!-- 下一页 -->
+                        <li class="page-item" th:classappend="${taskPage.current == taskPage.pages} ? 'disabled'">
+                            <a class="page-link" href="#" th:data-page="${taskPage.current + 1}">Next</a>
+                        </li>
+                    </ul>
+                </nav>
+            </div>
         </div>
     </div>
 </div>

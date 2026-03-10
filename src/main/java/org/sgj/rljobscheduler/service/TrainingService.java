@@ -6,6 +6,8 @@ import org.sgj.rljobscheduler.dto.TrainingRequest;
 import org.sgj.rljobscheduler.dto.TrainingResult;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import java.util.List;
 import java.util.UUID;
@@ -54,6 +56,13 @@ public class TrainingService {
         });
 
         return new TrainingResult(taskId, "PENDING", 0, "please wait...","None");
+    }
+
+    public IPage<TrainingTask> getTasksByPage(int page, int size) {
+        Page<TrainingTask> pageParam = new Page<>(page, size);
+        // 按创建时间倒序排列 (最新的在最前面)
+        pageParam.addOrder(com.baomidou.mybatisplus.core.metadata.OrderItem.desc("created_at"));
+        return taskMapper.selectPage(pageParam, null);
     }
 
     /**
