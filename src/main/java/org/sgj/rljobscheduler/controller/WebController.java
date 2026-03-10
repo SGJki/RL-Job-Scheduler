@@ -3,15 +3,14 @@ package org.sgj.rljobscheduler.controller;
 import org.sgj.rljobscheduler.service.TrainingService;
 import org.sgj.rljobscheduler.dto.TrainingRequest;
 import org.sgj.rljobscheduler.entity.TrainingTask;
+import org.sgj.rljobscheduler.dto.TrainingResult;
 
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.*;
 import com.baomidou.mybatisplus.core.metadata.IPage;
-import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 @Controller
 public class WebController {
@@ -35,12 +34,9 @@ public class WebController {
 
     // 处理表单提交
     @PostMapping("/submit")
-    public String submitTask(@ModelAttribute TrainingRequest request) {
-        // 调用 Service 启动任务
-        trainingService.startTraining(request);
-
-        // 重定向回首页 (刷新列表)
-        return "redirect:/";
+    @ResponseBody // 直接返回 JSON 结果，不跳转页面
+    public TrainingResult submitTask(@ModelAttribute TrainingRequest request) {
+        return trainingService.startTraining(request);
     }
 
     // 局部刷新接口：只返回表格片段 (Fragment)

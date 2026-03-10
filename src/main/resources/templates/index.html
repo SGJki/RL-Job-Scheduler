@@ -15,17 +15,49 @@
     </style>
     <!-- 引入 jQuery 方便做 AJAX -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- 引入 Bootstrap JS (用于弹窗) -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         $(document).ready(function() {
             var currentPage = 1;
+
+            // 自动刷新函数
             function refreshTable() {
                 $.get('/tasks/fragment?page=' + currentPage, function(data) {
                     $('#task-table-container').replaceWith(data);
                 });
             }
 
+            // AJAX 提交表单
+            $('#trainingForm').on('submit', function(e) {
+                e.preventDefault(); // 阻止默认的表单跳转
+                console.log("Submitting form via AJAX...");
+
+                $.post($(this).attr('action'), $(this).serialize(), function(result) {
+                    console.log("Success! Result:", result);
+
+                    // 弹窗显示成功消息
+                    var modalEl = document.getElementById('messageModal');
+                    if (modalEl) {
+                        var myModal = new bootstrap.Modal(modalEl);
+                        $('#modalMessageContent').text("任务已创建，准备后台执行: " + result.taskId);
+                        myModal.show();
+                    } else {
+                        console.error("Modal element #messageModal not found!");
+                        alert("任务已创建: " + result.taskId); // 降级处理
+                    }
+
+                    // 立即刷新列表
+                    refreshTable();
+                }).fail(function(xhr, status, error) {
+                    console.error("AJAX Error:", status, error);
+                    alert("Submission failed. Check console for details.");
+                });
+            });
+
             // 每 3 秒执行一次局部刷新
-            setInterval(refreshTable, 5000);
+            setInterval(refreshTable, 3000);
+
             // 处理分页点击事件 (使用事件委托，因为分页按钮是动态加载的)
             $(document).on('click', '.page-link', function(e) {
                 e.preventDefault();
@@ -49,7 +81,7 @@
             🚀 Create New Training Task
         </div>
         <div class="card-body">
-            <form action="#" th:action="@{/submit}" th:object="${request}" method="post">
+            <form id="trainingForm" action="#" th:action="@{/submit}" th:object="${request}" method="post">
                 <div class="row mb-3">
                     <div class="col-md-4">
                         <label class="form-label">Algorithm</label>
@@ -76,7 +108,7 @@
     <!-- 2. 任务列表表格 -->
     <div class="card">
         <div class="card-header bg-secondary text-white">
-            📊 Task History (Auto-refresh every 5s)
+            📊 Task History (Auto-refresh every 3s)
         </div>
         <div class="card-body">
             <!-- 包裹表格和分页条的容器，用于整体替换 -->
@@ -131,6 +163,24 @@
                         </li>
                     </ul>
                 </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal 弹窗 -->
+<div class="modal fade" id="messageModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title">Success</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <p id="modalMessageContent">Task Created!</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>

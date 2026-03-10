@@ -39,7 +39,7 @@ public class TrainingService {
 
         // 存库! 状态 = PENDING
         taskMapper.insert(task);
-        System.out.println(">>> [TrainingService] 任务已创建,准备后台执行: " + taskId);
+//        System.out.println(">>> [TrainingService] 任务已创建,准备后台执行: " + taskId);
 
         CompletableFuture<Double> future = trainingExecutor.executeTraining(taskId, episodes);
 
