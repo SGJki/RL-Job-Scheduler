@@ -4,6 +4,10 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 
+.venv
+__pycache__
+**/__pycache__/
+
 ### STS ###
 .apt_generated
 .classpath
