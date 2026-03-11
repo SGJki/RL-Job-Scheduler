@@ -13,6 +13,7 @@ public class TrainingRequest {
     private String algorithm;
     private int episodes;
     private double learningRate;
+    private Long userId;
 
     // 必须有无参构造函数 (Jackson 反序列化需要)
     public TrainingRequest() {}
@@ -42,4 +43,7 @@ public class TrainingRequest {
     public void setLearningRate(Double learningRate) {
         System.out.println(">>> [Setter] setLearningRate 被调用: " + learningRate);
         this.learningRate =  (learningRate == null) ? 0.0 : learningRate; }
+
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
 }

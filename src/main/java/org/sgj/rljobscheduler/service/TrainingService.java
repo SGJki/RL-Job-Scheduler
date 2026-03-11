@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 
 import java.util.List;
 import java.util.UUID;
@@ -26,7 +27,7 @@ public class TrainingService {
     /**
      * 启动训练任务 (持久化到数据库)
      */
-    public TrainingResult startTraining(TrainingRequest request) {
+    public TrainingResult startTraining(TrainingRequest request, Long userId) {
         // 1. 生成任务 ID 并保存到数据库
         String taskId = UUID.randomUUID().toString().substring(0, 8);
 
@@ -36,6 +37,7 @@ public class TrainingService {
 
         TrainingTask task = new TrainingTask(taskId, request.getAlgorithm(),
                 episodes, learningRate);
+        task.setUserId(userId);
 
         // 存库! 状态 = PENDING
         taskMapper.insert(task);
@@ -58,11 +60,15 @@ public class TrainingService {
         return new TrainingResult(taskId, "PENDING", 0, "please wait...","None");
     }
 
-    public IPage<TrainingTask> getTasksByPage(int page, int size) {
+    public IPage<TrainingTask> getTasksByPage(int page, int size, Long userId, boolean isAdmin) {
         Page<TrainingTask> pageParam = new Page<>(page, size);
         // 按创建时间倒序排列 (最新的在最前面)
         pageParam.addOrder(com.baomidou.mybatisplus.core.metadata.OrderItem.desc("created_at"));
-        return taskMapper.selectPage(pageParam, null);
+        QueryWrapper<TrainingTask> queryWrapper = new QueryWrapper<>();
+        if (!isAdmin && userId != null) {
+            queryWrapper.eq("user_id", userId);
+        }
+        return taskMapper.selectPage(pageParam, queryWrapper);
     }
 
     /**

@@ -24,7 +24,7 @@ public class TrainingController {
     @PostMapping("/train")
     public TrainingResult train(@RequestBody TrainingRequest request) {
         System.out.println(">>> [Controller] 收到训练请求");
-        return trainingService.startTraining(request);
+        return trainingService.startTraining(request, request.getUserId());
     }
 
     /**

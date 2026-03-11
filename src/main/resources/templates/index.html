@@ -73,7 +73,22 @@
 <body>
 
 <div class="container">
-    <h1 class="text-center mb-4">🤖 RL Training Dashboard</h1>
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1>🤖 RL Training Dashboard</h1>
+        <div>
+            <span class="me-2" id="userInfo"></span>
+            <button id="logoutBtn" class="btn btn-outline-danger btn-sm">退出登录</button>
+        </div>
+    </div>
+
+    <script>
+        // 退出登录逻辑
+        $('#logoutBtn').click(function() {
+            $.post('/api/auth/logout', function() {
+                window.location.href = '/login';
+            });
+        });
+    </script>
 
     <!-- 1. 提交新任务表单 -->
     <div class="card">

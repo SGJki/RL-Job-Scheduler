@@ -34,6 +34,7 @@ public class TrainingTask {
     private LocalDateTime createdAt;
     private LocalDateTime completedAt;
     private String errorMessage;
+    private Long userId;
 
     // 必须有无参构造函数
     public TrainingTask() {}
@@ -51,6 +52,9 @@ public class TrainingTask {
     // Getters and Setters
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
+
+    public Long getUserId() { return userId; }
+    public void setUserId(Long userId) { this.userId = userId; }
 
     public String getAlgorithm() { return algorithm; }
     public void setAlgorithm(String algorithm) { this.algorithm = algorithm; }

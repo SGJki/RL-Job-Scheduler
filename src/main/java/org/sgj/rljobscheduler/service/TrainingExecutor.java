@@ -34,10 +34,9 @@ public class TrainingExecutor {
     private static final String LOG_FILE = "logs/training.log";
     @Autowired
     private TrainingTaskMapper taskMapper;
-
     @PostConstruct
     public void init() {
-        // 启动时清空日志文件
+        // 启动时检查日志文件
         File logDir = new File("logs");
         if (!logDir.exists()) {
         boolean success = logDir.mkdir();
