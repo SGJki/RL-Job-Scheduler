@@ -42,7 +42,7 @@ this is a web Service for RL training manager
 
 # RL Training Platform (强化学习训练平台)
 
-> **Current Status**: Phase 4 Completed (Interactive Frontend & Visualization)
+> **Current Status**: Phase 10 (Gateway + Nacos + 流量治理 + 可观测性) 已完成第一轮落地与收尾硬化
 
 这是一个基于 Spring Boot 构建的后端系统，旨在管理和调度强化学习（RL）训练任务。目前支持异步任务提交、MySQL 持久化存储、以及基于 Web 的可视化交互界面。
 
@@ -128,35 +128,124 @@ src/main/java/org/sgj/rljobscheduler/
 
 ## 📦 快速开始 (Quick Start)
 
-### 1. 环境准备
-- JDK 1.17+
+### 1) 环境准备
+- JDK 17+
 - Maven 3.6+
-- MySQL 8.0+ (创建数据库 `testdb`)
-- uv
+- MySQL 8+（创建数据库 `testdb`）
+- Redis（用于调度/限流）
+- Nacos（服务注册发现）
+- uv（用于本地 Python 依赖管理，可选）
 
-同步script中训练脚本python环境
+同步 scripts 里的 Python 环境（可选）：
 ```bash
 uv sync
 ```
 
-### 2. 数据库配置
-修改 `src/main/resources/application.properties`:
-```properties
-spring.datasource.url=jdbc:mysql://localhost:3306/testdb?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai
-spring.datasource.username=root
-spring.datasource.password=your_password
-```
+### 2) 启动依赖（本机）
+- MySQL：确保 `testdb` 已创建，且账号密码与配置一致
+- Redis：默认 `localhost:6379`
+- Nacos：建议使用 `8848` 作为 Server 端口（Console/UI 可能映射到 `8080`，两者用途不同）
+  - Nacos Console 常见地址：`http://127.0.0.1:8848/nacos`
 
-### 3. 运行项目
+### 3) 启动服务（推荐顺序）
+1. 启动 Master
 ```bash
-mvn spring-boot:run
+./mvnw spring-boot:run
 ```
 
-### 4. 访问页面
-打开浏览器访问: [http://localhost:8081](http://localhost:8080)
+2. 启动 Gateway（独立 Maven 工程）
+```bash
+./mvnw -f gateway/pom.xml spring-boot:run
+```
 
-### 5. 查看日志
-训练任务的详细日志（包括 Python 脚本输出）会保存在项目根目录的 `logs/training.log` 文件中。
+3. 访问入口（统一入口）
+- `http://localhost:8081/`
+
+### 4) Worker（可选）
+Worker 是独立 Java Agent（用于 Phase 9 的分布式执行），只在你需要分布式调度时启动。
+
+---
+
+## ⚙️ 配置整理 (Config Cheatsheet)
+
+### 入口与端口
+- Gateway：`GATEWAY_PORT`（默认 8081）
+- Master：`MASTER_PORT`（默认 8082）
+- Netty RPC：`rpc.server.port`（默认 9000）
+
+### Nacos（Gateway/Master 通用）
+- `NACOS_ADDR`（默认 `127.0.0.1:8848`）
+- `NACOS_USERNAME`（默认 `nacos`）
+- `NACOS_PASSWORD`（默认 `599500`）
+
+### JWT（Gateway/Master 通用）
+- `JWT_SECRET`（建议线上显式设置，避免默认值）
+
+### 网关信任边界（Master）
+- `GATEWAY_TRUST_HEADERS`：是否接受来自网关的签名 Header（默认 `true`）
+- `GATEWAY_REQUIRE`：是否强制要求“受保护路径”必须带网关签名头（默认 `true`）
+  - 生产建议保持 `true`，并确保 Master 端口不对公网暴露
+  - 本地直连调试时可临时设置 `GATEWAY_REQUIRE=false`
+- `GATEWAY_SHARED_SECRET`：网关与 Master 共享密钥（两边必须一致）
+- `GATEWAY_MAX_SKEW_SECONDS`：签名时间戳允许误差（默认 300）
+
+### 流量治理（Gateway）
+- JWT 强制鉴权：`JWT_ENFORCE`（默认 `true`）
+- 限流开关：`RATE_LIMIT_ENABLED`（默认 `true`）
+- 限流窗口：`RATE_LIMIT_WINDOW_SECONDS`（默认 10）
+- 限流次数：`RATE_LIMIT_MAX_REQUESTS`（默认 3）
+- 降级开关：`FALLBACK_ENABLED`（默认 `true`）
+- 降级超时：`FALLBACK_TIMEOUT_MS`（默认 5000）
+
+配置文件参考：
+- Master：[application.yaml](file:///c:/Users/13253/dataDisk/java_code/Welcome/RL-Job-Scheduler/src/main/resources/application.yaml)
+- Gateway：[application.yaml](file:///c:/Users/13253/dataDisk/java_code/Welcome/RL-Job-Scheduler/gateway/src/main/resources/application.yaml)
+
+---
+
+## 🔭 可观测性硬化 (Observability)
+
+### TraceId（跨 Gateway/Master）
+- Header：`X-Trace-Id`
+- 网关会自动生成并在请求/响应上携带；Master 会回写响应头并写入日志 MDC
+- Master 日志文件：`logs/app.log`
+  - 每行中 `-[<traceId>]` 就是 TraceId（未处在 HTTP 请求链路时会显示为空 `[]`）
+
+### 任务日志与 TraceId 关联
+- 新任务的日志文件第一行写入 `TRACE_ID:<traceId>`
+  - Master：`logs/<taskId>.log`
+  - Worker：`server_log/<taskId>.log`
+用途：从任务日志可反查该任务对应的 HTTP TraceId，再去 `logs/app.log` 精准定位入口与链路问题。
+
+---
+
+## 🧪 灰度转发 (Canary Routing)
+
+最小灰度规则：请求头带 `X-Canary: true` 的流量转发到 `rl-master-canary`（HTTP + WebSocket）。
+增强规则（可选）：
+- 按用户白名单：`security.canary.user-ids`（匹配 `X-User-Id`）
+- 按百分比分流：`security.canary.percent`（0-100，基于 `X-User-Id` / `X-Trace-Id` 做稳定 hash）
+
+示例：
+```bash
+curl -i -H "X-Canary: true" http://localhost:8081/
+```
+
+要让灰度生效，需要额外启动一个 Master 实例并注册为 `rl-master-canary`：
+- 方式：覆盖 `spring.application.name` 与端口，例如（PowerShell）：
+```bash
+$env:MASTER_PORT=8083
+$env:SPRING_APPLICATION_NAME="rl-master-canary"
+./mvnw spring-boot:run
+```
+
+---
+
+## 🩺 Actuator（网关）
+- BasePath：`/gateway-actuator`
+- 暴露端点：`health,info,gateway`
+  - 例：`http://localhost:8081/gateway-actuator/health`
+  - 路由：`http://localhost:8081/gateway-actuator/gateway/routes`
 
 
 ## 📂 项目结构
@@ -187,10 +276,10 @@ scripts/
 ## run:
 
     1. 启动MySQL数据库 net start mysql 
-    2. 启动nacos  startup.cmd -m standalone   8080
+    2. 启动nacos  startup.cmd -m standalone（建议 8848）
     3. 启动 redis
-    4. 启动项目 mvn spring-boot:run
-    5. 启动gateway  mvn spring-boot:run        ./mvnw -f gateway/pom.xml spring-boot:run
+    4. 启动 Master  ./mvnw spring-boot:run
+    5. 启动 Gateway ./mvnw -f gateway/pom.xml spring-boot:run
     6. 启动前端 npm run dev
     7. 访问gateway http://localhost:8081
 

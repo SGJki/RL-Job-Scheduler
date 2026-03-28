@@ -31,6 +31,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Value("${security.gateway.enabled:true}")
     private boolean gatewayEnabled;
 
+    @Value("${security.gateway.require:false}")
+    private boolean gatewayRequire;
+
     @Value("${security.gateway.shared-secret:}")
     private String gatewaySharedSecret;
 
@@ -40,8 +43,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        boolean gatewayHeaderValid = false;
         if (SecurityContextHolder.getContext().getAuthentication() == null) {
-            tryGatewayHeaderAuthentication(request);
+            gatewayHeaderValid = tryGatewayHeaderAuthentication(request);
+        }
+
+        if (gatewayRequire && isProtectedPath(request) && !gatewayHeaderValid) {
+            response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+            response.setContentType("text/plain");
+            response.getWriter().write("Forbidden");
+            return;
         }
 
         String token = null;
@@ -78,14 +89,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     }
 
-    private void tryGatewayHeaderAuthentication(HttpServletRequest request) {
+    private boolean tryGatewayHeaderAuthentication(HttpServletRequest request) {
         if (!gatewayEnabled) {
-            return;
+            return false;
         }
 
         String gatewayAuth = request.getHeader("X-Gateway-Auth");
         if (gatewayAuth == null || gatewayAuth.isBlank()) {
-            return;
+            return false;
         }
 
         String userId = request.getHeader("X-User-Id");
@@ -102,19 +113,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 traceId == null || traceId.isBlank() ||
                 tsHeader == null || tsHeader.isBlank() ||
                 sigHeader == null || sigHeader.isBlank()) {
-            return;
+            return false;
         }
 
         long tsSeconds;
         try {
             tsSeconds = Long.parseLong(tsHeader);
         } catch (NumberFormatException e) {
-            return;
+            return false;
         }
 
         long now = Instant.now().getEpochSecond();
         if (Math.abs(now - tsSeconds) > gatewayMaxSkewSeconds) {
-            return;
+            return false;
         }
 
         String secret = gatewaySharedSecret;
@@ -128,23 +139,37 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String payload = request.getMethod() + "\n" + request.getRequestURI() + "\n" + traceId + "\n" + tsHeader;
         String expected = hmacSha256Hex(secret.getBytes(StandardCharsets.UTF_8), payload);
         if (expected.isBlank()) {
-            return;
+            return false;
         }
         if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), sigHeader.getBytes(StandardCharsets.UTF_8))) {
-            return;
+            return false;
         }
 
         Long userIdLong;
         try {
             userIdLong = Long.parseLong(userId);
         } catch (NumberFormatException e) {
-            return;
+            return false;
         }
 
         UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
                 username, null, Collections.singletonList(new SimpleGrantedAuthority("ROLE_" + role)));
         authentication.setDetails(userIdLong);
         SecurityContextHolder.getContext().setAuthentication(authentication);
+        return true;
+    }
+
+    private boolean isProtectedPath(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        if (path == null) {
+            return true;
+        }
+        if (path.startsWith("/api/auth/")) return false;
+        if (path.equals("/login") || path.startsWith("/login/")) return false;
+        if (path.startsWith("/ws")) return false;
+        if (path.startsWith("/h2-console")) return false;
+        if (path.startsWith("/api/monitor/")) return false;
+        return true;
     }
 
     private String hmacSha256Hex(byte[] secretBytes, String payload) {

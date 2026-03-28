@@ -25,6 +25,12 @@ security:
   jwt:
     secret: ${JWT_SECRET:rl-job-scheduler-dev-secret-rl-job-scheduler-dev-secret}
     enforce: ${JWT_ENFORCE:true}
+  canary:
+    enabled: ${CANARY_ENABLED:true}
+    percent: ${CANARY_PERCENT:0}
+    user-ids: []
+    header-name: X-Canary
+    header-value: "true"
   gateway:
     shared-secret: ${GATEWAY_SHARED_SECRET:rl-gateway-dev-shared-secret599500}
   rate-limit:
@@ -54,4 +60,4 @@ management:
     web:
       base-path: /gateway-actuator
       exposure:
-        include: "*"
+        include: health,info,gateway

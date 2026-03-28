@@ -46,6 +46,7 @@ security:
     secret: ${JWT_SECRET:rl-job-scheduler-dev-secret-rl-job-scheduler-dev-secret}
   gateway:
     enabled: ${GATEWAY_TRUST_HEADERS:true}
+    require: ${GATEWAY_REQUIRE:true}
     shared-secret: ${GATEWAY_SHARED_SECRET:rl-gateway-dev-shared-secret599500}
     max-skew-seconds: ${GATEWAY_MAX_SKEW_SECONDS:300}
 mybatis-plus:
