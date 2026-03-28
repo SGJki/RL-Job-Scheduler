@@ -7,6 +7,7 @@ import org.sgj.rljobscheduler.master.dto.TrainingRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import jakarta.servlet.http.HttpServletRequest;
 /**
  * 控制器层 (Controller)
  * 只负责接收请求，不做复杂业务逻辑
@@ -22,9 +23,10 @@ public class TrainingController {
      * 启动训练接口
      */
     @PostMapping("/train")
-    public TrainingResult train(@RequestBody TrainingRequest request) {
+    public TrainingResult train(@RequestBody TrainingRequest request, HttpServletRequest httpRequest) {
         System.out.println(">>> [Controller] 收到训练请求");
-        return trainingService.startTraining(request, request.getUserId());
+        String traceId = httpRequest.getHeader("X-Trace-Id");
+        return trainingService.startTraining(request, request.getUserId(), traceId);
     }
 
     /**

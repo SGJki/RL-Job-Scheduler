@@ -110,6 +110,7 @@ logs/
 *   **WebSocket 集成**：将 `logs/training_all.log` 的增量内容实时推送到前端，实现“类似控制台”的实时监控体验。
 *   **Docker 化**：将 MySQL、Java 应用和 Python 环境打包成 Docker Compose，一键部署。
 *   **算法扩展**：对接真实的 PyTorch/TensorFlow 训练代码，支持 GPU 调度。
+*   **MDC 传播 (可观测性增强)**：当前 TraceId 主要覆盖同步 HTTP 请求链路；后续可在 `@Async` 线程池、队列消费线程 (LogManager) 等异步边界实现 MDC/TraceId 传播（或显式携带 traceId），以便用同一个 TraceId 串联“请求 -> 调度 -> 执行 -> 日志/状态上报”的全链路排障。避免 ThreadLocal 泄漏导致串台，需确保每次任务结束清理 MDC。
 
 # RL-Job-Scheduler Advanced Roadmap (高级功能规划)
 

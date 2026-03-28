@@ -15,6 +15,8 @@ import org.springframework.web.bind.annotation.*;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 @Controller
 public class WebController {
     @Autowired
@@ -45,8 +47,9 @@ public class WebController {
     // 处理表单提交
     @PostMapping("/submit")
     @ResponseBody // 直接返回 JSON 结果，不跳转页面
-    public TrainingResult submitTask(@ModelAttribute TrainingRequest request) {
-        return trainingService.startTraining(request, getCurrentUserId());
+    public TrainingResult submitTask(@ModelAttribute TrainingRequest request, HttpServletRequest httpRequest) {
+        String traceId = httpRequest.getHeader("X-Trace-Id");
+        return trainingService.startTraining(request, getCurrentUserId(), traceId);
     }
 
     // 局部刷新接口：只返回表格片段 (Fragment)

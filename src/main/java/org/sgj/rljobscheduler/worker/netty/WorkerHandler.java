@@ -70,6 +70,15 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
         File workerLogFile = new File(workerLogDir, taskId + ".log");
 
         try (PrintWriter workerFileWriter = new PrintWriter(new FileWriter(workerLogFile, true))) {
+            if (workerLogFile.length() == 0) {
+                String traceId = req.getTraceId();
+                if (traceId == null || traceId.isBlank()) {
+                    traceId = "unknown";
+                }
+                workerFileWriter.println("TRACE_ID:" + traceId);
+                workerFileWriter.flush();
+            }
+
             List<String> command = new ArrayList<>();
             command.add("uv");
             command.add("run");
