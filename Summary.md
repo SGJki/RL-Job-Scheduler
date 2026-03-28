@@ -205,28 +205,34 @@ logs/
 ```
 ## ☁️ Phase 9: 分布式调度 (Distributed Scheduling & RPC)
 
-> **目标**: 将计算压力从 Web 服务器剥离，构建可横向扩展的算力集群。
+> **目标**: 构建 Master-Worker 架构，将计算任务分发到不同的计算节点执行，实现算力横向扩展。
 
-### 1. 核心痛点
-- Web 服务器和训练进程在同一台机器上。如果训练任务把 CPU/内存吃光了，Web 服务也会挂掉。
-- 只有一台机器，算力有限。
+### 1. 技术栈
+- **RPC 通信**: **Netty** (高性能 NIO) + **Protobuf** (二进制序列化)
+- **注册中心**: **Redis** (基于 Lua 脚本实现原子性抢占与心跳管理)
+- **解耦架构**: Master 引入 **LogManager** (异步阻塞队列) 隔离网络 IO 与文件 IO
 
-### 2. 技术栈详解
-- **网络框架**: **Netty**
-    - 高性能 NIO 框架，用于实现自定义 RPC 协议。
-- **通信协议**: **Protobuf (Google Protocol Buffers)**
-    - 比 JSON 更小、更快，适合内部高性能传输。
-- **注册中心**: **Nacos** 或 **Redis**
-    - 管理所有 Worker 节点的在线状态。
-- **架构角色**:
-    - **Master (Scheduler)**: 也就是现在的 Spring Boot 应用，负责接收 HTTP 请求、分发任务。
-    - **Worker (Agent)**: 部署在 GPU 服务器上的轻量级 Java/Go 程序，负责接收指令、执行 Python、回传日志。
+### 2. 实现细节
+- **目录结构重构**: 
+    - 划分为 `common` (共享协议与编解码)、`master` (Web 控制中心与调度大脑)、`worker` (轻量级执行 Agent)。
+- **自定义二进制协议**: 
+    - 包含 MagicNumber (0xCAFEBABE)、Version、FullLen、MsgType，有效解决 TCP 粘包/拆包问题。
+- **分布式状态机**: 
+    - 实现 `IDLE` / `PENDING` / `RUNNING` / `DOWN` 四种状态。
+    - **抢占机制**: Master 使用 Redis Lua 脚本原子性锁定 Worker，防止任务重复下发。
+    - **续期容错**: Worker 在心跳中携带 `currentTaskId`，Master 自动为 Redis 中的 `TaskIDKey` 续期，防止因网络抖动导致 Worker 被“错杀”。
+- **异步日志流处理**: 
+    - **Worker 端**: 拦截 Python 进程输出，本地存入 `server_log/` 模拟目录，同时通过 RPC 推送。
+    - **Master 端**: `LogManager` 消费者线程将日志写入 `logs/` 并同步触发 WebSocket 旁路推送。
+- **全链路异常处理**: 
+    - 捕获并回传 Python 执行的具体错误（如 `uv` 命令未找到），Master 将报错信息持久化到 SQL 数据库。
+    - 任务结束（COMPLETED/FAILED）时，Master 自动释放 Redis 中的 Worker 锁定。
 
-### 3. 实现流程
-1.  **Worker 开发**: 基于 Netty 编写一个 Agent，启动时向 Redis 注册 ("我是 Worker-1，我有 4 个 GPU")。
-2.  **任务分发**: Scheduler 收到任务 -> 查询 Redis 找空闲 Worker -> 建立 Netty 长连接 -> 发送 `ExecuteTaskRequest` (Protobuf)。
-3.  **远程执行**: Worker 收到请求 -> 启动本地 `ProcessBuilder` -> 捕获日志。
-4.  **日志回传**: Worker -> Netty -> Scheduler -> WebSocket -> 前端。
+### 3. Bug 修复记录
+- [x] **Redis 连接异常**: 修复了 Redis 未启动或密码配置错误导致的调度崩溃，增加了 Try-Catch 容错。
+- [x] **UI 状态不更新**: 解决了分布式环境下状态报告未通过 WebSocket 推送前端导致的“假 Pending”问题。
+- [x] **Worker 无法释放**: 实现了 `Channel` 属性绑定 `workerId`，确保任务结束时能精准删除 Redis 占用 Key。
+- [x] **Bean 注入失败**: 修复了重构期间丢失 `AsyncConfig` 导致 Master 启动失败的 Bug。
 
 ---
 

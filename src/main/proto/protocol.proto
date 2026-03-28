@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package org.sgj.rljobscheduler.common.proto;
+
+option java_multiple_files = true;
+option java_package = "org.sgj.rljobscheduler.common.proto";
+option java_outer_classname = "JobProtocol";
+
+// 1. 心跳包 (Worker -> Master)
+message HeartbeatRequest {
+    string workerId = 1;
+    string hostname = 2;
+    int32 availableGpus = 3;
+    double cpuUsage = 4;
+    double memoryUsage = 5;
+    string currentTaskId = 6; // 当前正在运行的任务ID，为空表示空闲
+}
+
+// 2. 任务下发 (Master -> Worker)
+message ExecuteTaskRequest {
+    string taskId = 1;
+    string algorithm = 2;
+    int32 episodes = 3;
+    double learningRate = 4;
+}
+
+// 3. 任务下发响应 (Worker -> Master)
+// 包含 TaskIDKey 的首次注册确认
+message ExecuteTaskResponse {
+    string taskId = 1;
+    bool accepted = 2;
+    string message = 3;
+}
+
+// 4. 日志数据 (Worker -> Master)
+message LogDataRequest {
+    string taskId = 1;
+    string logLine = 2;
+    int64 timestamp = 3;
+    bool isError = 4;
+}
+
+// 5. 任务状态上报 (Worker -> Master)
+message TaskStatusReport {
+    string taskId = 1;
+    string status = 2; // RUNNING, COMPLETED, FAILED
+    double finalReward = 3;
+    string errorMessage = 4;
+}

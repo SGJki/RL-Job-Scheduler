@@ -1,4 +1,35 @@
 this is a web Service for RL training manager 
+ 永远不要带着“未提交的修改”切换分支。
+
+
+### 第一步：在当前分支 (dev) “结账”
+在你准备离开 dev 分支之前，必须处理掉手头的改动。
+
+- 做法 A（正式提交） ： git add . -> git commit -m "完成某某功能" 。这是最推荐的，因为你的进度被永久记录了。
+- 做法 B（临时存入“储物柜”） ：如果你改了一半不想提交，执行 git stash 。这会把你的改动暂时藏起来，让工作区瞬间变干净。
+### 第二步：切换到目标分支 (master)
+现在工作区干净了，切换分支将非常顺滑：
+
+- 执行： git checkout master
+### 第三步：同步远程状态
+在合并之前，先确保你本地的 master 是最新的：
+
+- 执行： git pull origin master
+### 第四步：执行合并
+将 dev 的成果拿过来：
+
+- 执行： git merge dev
+- 此时可能发生两种情况 ：
+  1. Fast-forward ：没有任何冲突，合并瞬间完成。
+  2. Conflict（冲突） ：如果两个分支改了同一行，Git 会停下来。你需要手动打开报错的文件，选择保留哪个版本，然后再次 add 和 commit 。
+### 第五步：推送到远程
+- 执行： git push origin master
+### 💡 特殊场景：如果你已经在 master 分支上改了东西怎么办？
+就像你刚才遇到的情况，如果你在 master 上已经写了代码但没提交：
+
+1. 方案 A（推荐） ：直接在 master 上 commit 掉这些改动，然后再 merge dev 。
+2. 方案 B ：执行 git stash 藏起来 -> git merge dev -> git stash pop 把藏起来的代码再拿出来贴上去。
+
 
 这个项目不仅仅是用来练手的，它的目标是 能够写在简历上，证明你懂“后端架构”和“AI工程化” 。
 1. 核心业务痛点 (你的故事线)
@@ -15,7 +46,33 @@ this is a web Service for RL training manager
 
 这是一个基于 Spring Boot 构建的后端系统，旨在管理和调度强化学习（RL）训练任务。目前支持异步任务提交、MySQL 持久化存储、以及基于 Web 的可视化交互界面。
 
-## 🚀 项目进度 (Roadmap)
+## 🏗️ 架构划分 (Architecture)
+本项目采用 **Master-Worker** 分布式架构，将 Web 管理与计算压力解耦。
+
+### 1. 目录结构
+```text
+src/main/java/org/sgj/rljobscheduler/
+├── common/             # [公共模块] 
+│   ├── proto/          # Protobuf 协议定义及生成的 Java 类
+│   └── netty/          # 自定义 RPC 协议头、编解码器
+├── master/             # [调度大脑] (Spring Boot 应用)
+│   ├── config/         # 异步线程池、安全、WebSocket、Redis 配置
+│   ├── controller/     # RESTful API、监控接口、Thymeleaf 路由
+│   ├── service/        # 任务分发逻辑、LogManager (异步日志处理器)
+│   └── mapper/         # 数据库访问层
+└── worker/             # [计算节点] (轻量级 Java Agent)
+    ├── agent/          # 心跳上报、RPC 连接管理
+    └── process/        # Python 进程执行器、实时日志拦截
+```
+
+### 2. 核心设计
+*   **通讯协议**: 基于 Netty + Protobuf 的自定义二进制协议。
+*   **状态机**: 实现 `IDLE` / `PENDING` / `RUNNING` / `DOWN` 四种状态流转，支持网络波动容错。
+*   **性能优化**: Master 端引入 `LogManager` 异步队列，实现日志持久化与 WebSocket 旁路推送的解耦。
+
+---
+
+## 📅 路线图 (Roadmap)
 
 - [x] **Phase 1: 基础骨架 (RESTful API)**
     - 实现 Spring Boot Web 服务

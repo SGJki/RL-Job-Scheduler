@@ -1,4 +1,6 @@
-package org.sgj.rljobscheduler;
+package org.sgj.rljobscheduler.master;
+
+import org.sgj.rljobscheduler.master.RlJobSchedulerApplication;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
