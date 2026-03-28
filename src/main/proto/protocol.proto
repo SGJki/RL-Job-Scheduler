@@ -22,6 +22,7 @@ message ExecuteTaskRequest {
     string algorithm = 2;
     int32 episodes = 3;
     double learningRate = 4;
+    string traceId = 5;
 }
 
 // 3. 任务下发响应 (Worker -> Master)

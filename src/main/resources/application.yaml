@@ -1,9 +1,12 @@
 logging:
   file:
     name: logs/app.log
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{traceId}] %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{traceId}] %msg%n"
 
 server:
-  port: 8080
+  port: ${MASTER_PORT:8082}
 
 rpc:
   server:
@@ -11,7 +14,13 @@ rpc:
 
 spring:
   application:
-    name: RL-Job-Scheduler
+    name: rl-master
+  cloud:
+    nacos:
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:599500}
+      discovery:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
   datasource:
     url: jdbc:mysql://localhost:3306/testdb?useUnicode=true&characterEncoding=utf-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     driverClassName: com.mysql.cj.jdbc.Driver
@@ -32,6 +41,13 @@ spring:
     cache: false
     mode: HTML
     encoding: UTF-8
+security:
+  jwt:
+    secret: ${JWT_SECRET:rl-job-scheduler-dev-secret-rl-job-scheduler-dev-secret}
+  gateway:
+    enabled: ${GATEWAY_TRUST_HEADERS:true}
+    shared-secret: ${GATEWAY_SHARED_SECRET:rl-gateway-dev-shared-secret599500}
+    max-skew-seconds: ${GATEWAY_MAX_SKEW_SECONDS:300}
 mybatis-plus:
   configuration:
     auto-mapping-behavior: full

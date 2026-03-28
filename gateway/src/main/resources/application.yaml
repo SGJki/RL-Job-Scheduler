@@ -1,0 +1,57 @@
+server:
+  port: ${GATEWAY_PORT:8081}
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - [%X{traceId}] %msg%n"
+
+spring:
+  application:
+    name: rl-gateway
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: 5000ms
+  cloud:
+    nacos:
+      username: ${NACOS_USERNAME:nacos}
+      password: ${NACOS_PASSWORD:599500}
+      discovery:
+        server-addr: ${NACOS_ADDR:127.0.0.1:8848}
+security:
+  jwt:
+    secret: ${JWT_SECRET:rl-job-scheduler-dev-secret-rl-job-scheduler-dev-secret}
+    enforce: ${JWT_ENFORCE:true}
+  gateway:
+    shared-secret: ${GATEWAY_SHARED_SECRET:rl-gateway-dev-shared-secret599500}
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    fail-open: ${RATE_LIMIT_FAIL_OPEN:true}
+    max-requests: ${RATE_LIMIT_MAX_REQUESTS:3}
+    window-seconds: ${RATE_LIMIT_WINDOW_SECONDS:10}
+    methods:
+      - POST
+    path-prefixes:
+      - /submit
+      - /api/train
+  fallback:
+    enabled: ${FALLBACK_ENABLED:true}
+    timeout-ms: ${FALLBACK_TIMEOUT_MS:5000}
+    error-page-path: /gateway-error.html
+    exclude-path-prefixes:
+      - /gateway-actuator
+      - /gateway-error.html
+      - /ws
+
+management:
+  endpoint:
+    gateway:
+      enabled: true
+  endpoints:
+    web:
+      base-path: /gateway-actuator
+      exposure:
+        include: "*"

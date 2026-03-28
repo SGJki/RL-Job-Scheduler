@@ -85,20 +85,35 @@
 ---
 
 ## 🌐 Phase 10: 微服务网关重构 (Microservices Gateway)
-> **目标**: 当集群规模扩大后，实现统一入口治理、鉴权及全链路异步化。
+> **目标**: 引入统一入口 (Gateway) 与服务注册发现 (Nacos)，实现“路由与协议支持 / 鉴权迁移 / 流量治理”三大核心能力，为多 Master 横向扩展做准备。
 
-### 1. 技术栈
+### 1. 技术栈 (Phase 10)
 - **API 网关**: **Spring Cloud Gateway**
-- **鉴权中心**: **Spring Security OAuth2 / OpenID Connect**
-- **服务发现**: **Nacos**
-- **配置中心**: **Spring Cloud Config / Nacos Config**
+- **服务发现**: **Nacos Discovery** (单机模式，MySQL 持久化)
+- **负载均衡**: Spring Cloud LoadBalancer (Gateway 通过 `lb://` 路由)
+- **鉴权机制**: 迁移现有 **JWT** 到网关层 (阶段性落地)
+- **流量治理**: Gateway 层限流 + 超时/降级 (阶段性落地)
 
-### 2. 实现细节
-- [ ] **架构拆分**: 将 `Auth` (认证)、`Job` (核心业务)、`Worker` (计算) 拆分为独立的微服务。
-- [ ] **网关接入**: 所有外部请求（Web/API）统一经过 Gateway。
-- [ ] **统一鉴权**: Gateway 负责校验 JWT/OAuth2 Token，并在 Header 中透传用户信息。
-- [ ] **限流与熔断**: 配置 Sentinel 或 Resilience4j，防止单个任务堆积导致全系统崩溃。
-- [ ] **全链路监控**: 集成 SkyWalking 或 Zipkin，监控分布式环境下的请求调用链路。
+### 2. 实现编排 (先跑通，再逐步治理)
+- [ ] **0. 基础设施**
+    - [ ] Nacos Server 启动与验证（已完成：单机模式 + MySQL schema）。
+    - [ ] 为 Master 增加 Nacos Discovery 依赖与配置，使其自动注册为服务（例如 `rl-master`）。
+    - [ ] 新建独立 Gateway 应用（建议 `gateway/` 目录作为独立 Maven 工程），注册为服务（例如 `rl-gateway`）。
+- [ ] **1. 核心一：路由与协议支持 (Routing & Protocols)**
+    - [ ] HTTP 路由：将 `/**` 透明转发到 `lb://rl-master`（保持 Thymeleaf 页面与 REST API 行为一致）。
+    - [ ] WebSocket 路由：将 `/ws/**` 以 `lb:ws://rl-master` 转发，确保日志与状态推送可穿透网关。
+    - [ ] CORS 统一治理：在 Gateway 统一配置跨域策略（Master 端可逐步收敛/移除重复 CORS 逻辑）。
+    - [ ] 健康检查：增加 Gateway 与 Master 的 `actuator/health`，便于联调。
+- [ ] **2. 核心二：鉴权迁移 (Auth Migration)**
+    - [ ] 第一阶段（兼容模式）：Gateway 不改动鉴权，仅做透明转发，确保系统可用。
+    - [ ] 第二阶段（网关鉴权）：Gateway `GlobalFilter` 校验 JWT（支持 Cookie `jwt_token` 与 Header `Authorization`）。
+    - [ ] 第三阶段（Header 透传）：Gateway 将 `userId/role` 注入 Header（例如 `X-User-Id`, `X-User-Role`），Master 从 Header 读取并减少重复校验。
+    - [ ] 安全边界：为防伪造，增加内部签名 Header（例如 `X-Gateway-Signature`）或限制 Master 仅内网可达。
+- [ ] **3. 核心三：流量治理 (Traffic Governance)**
+    - [ ] 限流：按 IP / userId 对 `/submit` 等敏感接口限流（Redis 令牌桶/漏桶）。
+    - [ ] 超时与降级：为转发请求设置超时；Master 不可用时返回统一降级 JSON，避免前端白屏。
+    - [ ] TraceId：Gateway 为每个请求注入 `X-Trace-Id`，便于定位跨服务问题。
+    - [ ] 灰度/路由策略（可选）：基于 Header/用户分组做灰度转发。
 
 ---
 

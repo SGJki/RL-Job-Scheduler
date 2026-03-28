@@ -36,6 +36,10 @@ public class SchedulerService {
      * 抢占并调度任务到合适的 Worker
      */
     public boolean scheduleTask(TrainingTask task) {
+        return scheduleTask(task, null);
+    }
+
+    public boolean scheduleTask(TrainingTask task, String traceId) {
         try {
             // 1. 获取所有在线 Worker
             Set<String> workerKeys = redisTemplate.keys("worker:*:hb");
@@ -50,7 +54,7 @@ public class SchedulerService {
                 // 2. 尝试抢占 (Lua 脚本保证原子性)
                 if (tryPreemptWorker(workerId, task.getId())) {
                     // 3. 抢占成功，通过 Netty 下发任务
-                    return dispatchTask(workerId, task);
+                    return dispatchTask(workerId, task, traceId);
                 }
             }
 
@@ -84,7 +88,7 @@ public class SchedulerService {
         return result != null && result == 1;
     }
 
-    private boolean dispatchTask(String workerId, TrainingTask task) {
+    private boolean dispatchTask(String workerId, TrainingTask task, String traceId) {
         Channel channel = channelManager.getChannel(workerId);
         if (channel == null || !channel.isActive()) {
             LOG.error(">>> Worker [{}] 已掉线，抢占失败", workerId);
@@ -93,11 +97,13 @@ public class SchedulerService {
             return false;
         }
 
+        String effectiveTraceId = (traceId == null || traceId.isBlank()) ? "unknown" : traceId;
         ExecuteTaskRequest req = ExecuteTaskRequest.newBuilder()
                 .setTaskId(task.getId())
                 .setAlgorithm(task.getAlgorithm())
                 .setEpisodes(task.getEpisodes())
                 .setLearningRate(task.getLearningRate())
+                .setTraceId(effectiveTraceId)
                 .build();
 
         NettyMessage message = new NettyMessage();

@@ -31,8 +31,8 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**", "/login", "/ws/**", "/h2-console/**").permitAll()
-                        .requestMatchers("/api/monitor/**").permitAll() // 暂时放行监控接口
-                        .anyRequest().permitAll() // 暂时全部放行以便测试，实际生产应改为 authenticated()
+                        .requestMatchers("/api/monitor/**").permitAll()
+                        .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

@@ -6,6 +6,8 @@ import io.jsonwebtoken.SignatureAlgorithm;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
+import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
 import java.util.HashMap;
@@ -13,11 +15,19 @@ import java.util.Map;
 
 @Component
 public class JwtUtils {
-    // 密钥 (实际项目中应从配置文件读取，这里为了简化直接生成)
-    private static final Key SECRET_KEY = Keys.secretKeyFor(SignatureAlgorithm.HS256);
+    private Key secretKey;
 
     // 过期时间 (24小时)
     private static final long EXPIRATION_TIME = 86400000;
+
+    @PostConstruct
+    public void init() {
+        String configured = System.getenv("JWT_SECRET");
+        if (configured == null || configured.isBlank()) {
+            configured = "rl-job-scheduler-dev-secret-rl-job-scheduler-dev-secret";
+        }
+        this.secretKey = Keys.hmacShaKeyFor(configured.getBytes(StandardCharsets.UTF_8));
+    }
 
     /**
      * 生成 Token
@@ -32,7 +42,7 @@ public class JwtUtils {
                 .setSubject(username)
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
-                .signWith(SECRET_KEY)
+                .signWith(secretKey, SignatureAlgorithm.HS256)
                 .compact();
     }
 
@@ -41,7 +51,7 @@ public class JwtUtils {
      */
     public Claims parseToken(String token) {
         return Jwts.parserBuilder()
-                .setSigningKey(SECRET_KEY)
+                .setSigningKey(secretKey)
                 .build()
                 .parseClaimsJws(token)
                 .getBody();

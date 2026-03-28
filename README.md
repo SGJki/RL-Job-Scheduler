@@ -183,3 +183,14 @@ scripts/
 
 - **查询所有任务**
     - `GET /api/tasks`
+
+## run:
+
+    1. 启动MySQL数据库 net start mysql 
+    2. 启动nacos  startup.cmd -m standalone   8080
+    3. 启动 redis
+    4. 启动项目 mvn spring-boot:run
+    5. 启动gateway  mvn spring-boot:run        ./mvnw -f gateway/pom.xml spring-boot:run
+    6. 启动前端 npm run dev
+    7. 访问gateway http://localhost:8081
+
