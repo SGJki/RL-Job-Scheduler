@@ -203,6 +203,8 @@ logs/
 ├── {taskId}.log        # 单个任务的标准输出日志
 └── {taskId}error.log   # 单个任务的错误输出日志
 ```
+## ☁️ Phase 9: 分布式调度 (Distributed Scheduling & RPC)
+
 > **目标**: 将计算压力从 Web 服务器剥离，构建可横向扩展的算力集群。
 
 ### 1. 核心痛点

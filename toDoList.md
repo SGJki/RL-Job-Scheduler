@@ -32,33 +32,32 @@
 ### 1. 技术栈
 - **日志监听**: `Apache Commons IO (Tailer)`
 - **推送通道**: WebSocket (复用 Phase 7 基础设施)
-- **前端渲染**: 自定义控制台 UI (带自动滚动功能)
+- **前端渲染**: 自定义控制台 UI (支持历史回填与自动滚动)
 
 ### 2. 实现细节
 - [x] **依赖引入**: 添加了 `commons-io:2.15.1`。
-- [x] **全局监听**: 实现了 `GlobalLogTailerListener`，单线程高效监听 `logs/training.log`。
-- [x] **正则过滤**: 通过正则表达式提取 `[TaskID]`，实现日志与任务频道的精准匹配。
-- [x] **WebSocket 频道**: 建立动态频道 `/topic/logs/{taskId}`。
-- [x] **前端控制台**: 在 `index.html` 中集成日志模态框，支持实时追加、着色及自动滚动。
-- [x] **稳定性增强**: 为 Python 进程添加了 2 小时超时强制杀灭机制，防止僵尸进程。
-- [x] **系统监控**: 实现了 `/api/monitor/health` 接口，支持实时查看训练线程池状态。
+- [x] **日志拆分**: 实现了 stdout 和 stderr 的分离持久化 (`{taskId}.log`, `{taskId}error.log`)。
+- [x] **历史回填**: 新增 `GET /api/monitor/logs/{taskId}` 接口，支持弹窗重开时加载完整历史。
+- [x] **WebSocket 推送**: `GlobalLogTailerListener` 实时解析聚合日志并精准广播。
+- [x] **稳定性增强**: 引入自定义隔离线程池，添加 Python 进程 2 小时超时强制杀灭机制。
+- [x] **系统监控**: 实现了 `/api/monitor/health` 接口，支持实时查看线程池负载。
 
 ---
 
 ## ☁️ Phase 9: 分布式调度 (Distributed Scheduling & RPC)
-> **目标**: 算力扩容，支持将计算任务分发到不同的 GPU 物理节点执行。
+> **目标**: 将计算压力从 Web 服务器剥离，构建可横向扩展的算力集群。
 
-### 1. 技术栈
-- **网络通信**: **Netty** (高性能 NIO 框架)
-- **序列化**: **Protobuf** (极致传输性能)
-- **服务发现**: **Redis** (轻量级) 或 **Nacos** (企业级)
-- **调度算法**: 简单的 Load Balancer (如 Round Robin 或 GPU 负载优先)。
+### 1. 方案商讨中...
+- **通讯框架**: 待定 (Netty vs gRPC)
+- **注册中心**: 待定 (Redis vs Nacos)
+- **核心逻辑**: Master 任务分发、Worker 状态上报、日志远程回传。
 
-### 2. 实现细节
-- [ ] **Worker Agent 开发**: 编写一个独立的 Java 应用，负责接收 Master 指令并执行本地 Python 脚本。
-- [ ] **Master-Worker 通讯**: 基于 Netty 实现自定义 RPC，定义 `ExecuteTaskRequest` 和 `LogHeartbeat` 协议。
-- [ ] **注册中心接入**: Worker 启动时向注册中心上报可用算力（GPU 数量、内存等）。
-- [ ] **任务分发逻辑**: Master 接收请求 -> 负载均衡选择空闲 Worker -> 发送任务 -> 异步接收执行结果。
+### 2. 待编排实现细节
+- [ ] 架构详细方案设计
+- [ ] Worker Agent 模块创建
+- [ ] RPC 通讯协议定义
+- [ ] 负载均衡调度算法实现
+- [ ] 分布式日志收集与转发
 
 ---
 
