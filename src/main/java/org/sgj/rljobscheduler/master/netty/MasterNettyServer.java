@@ -28,6 +28,9 @@ public class MasterNettyServer {
 
     private static final Logger LOG = LoggerFactory.getLogger(MasterNettyServer.class);
 
+    @Value("${rpc.server.enabled:true}")
+    private boolean enabled;
+
     @Value("${rpc.server.port:9000}")
     private int port;
 
@@ -39,6 +42,10 @@ public class MasterNettyServer {
 
     @PostConstruct
     public void start() {
+        if (!enabled) {
+            LOG.info(">>> Master Netty Server 已禁用");
+            return;
+        }
         new Thread(() -> {
             bossGroup = new NioEventLoopGroup(1);
             workerGroup = new NioEventLoopGroup();

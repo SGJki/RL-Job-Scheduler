@@ -10,7 +10,8 @@ import org.springframework.boot.test.context.SpringBootTest;
                 "spring.datasource.url=jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1",
                 "spring.datasource.username=sa",
                 "spring.datasource.password=",
-                "spring.datasource.driverClassName=org.h2.Driver"
+                "spring.datasource.driverClassName=org.h2.Driver",
+                "rpc.server.enabled=false"
         }
 )
 class RlJobSchedulerApplicationTests {
