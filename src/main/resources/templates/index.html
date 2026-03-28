@@ -90,21 +90,40 @@
                 var taskId = $(this).data('taskid');
                 currentLogTaskId = taskId;
                 
-                // 清空控制台
-                $('#logConsole').empty();
-                $('#logModalTitle').text("Real-time Logs: " + taskId);
+                // 清空控制台并显示加载状态
+                $('#logConsole').empty().append('<div class="log-line text-info">>>> Loading historical logs...</div>');
+                $('#logModalTitle').text("Logs: " + taskId);
                 
                 // 显示弹窗
                 var logModal = new bootstrap.Modal(document.getElementById('logModal'));
                 logModal.show();
 
-                // 订阅该任务的日志频道
-                if (logSubscription) {
-                    logSubscription.unsubscribe();
-                }
-                
-                logSubscription = stompClient.subscribe('/topic/logs/' + taskId, function (message) {
-                    appendLogLine(message.body);
+                // 1. 先加载历史日志
+                $.get('/api/monitor/logs/' + taskId, function(response) {
+                    if (response.status === 'SUCCESS') {
+                        $('#logConsole').empty(); // 清除加载提示
+                        if (response.content.length === 0) {
+                            $('#logConsole').append('<div class="log-line text-warning">>>> No historical logs found. Waiting for new output...</div>');
+                        } else {
+                            response.content.forEach(function(line) {
+                                appendLogLine(line);
+                            });
+                        }
+                    } else if (response.status === 'NOT_FOUND') {
+                        $('#logConsole').empty().append('<div class="log-line text-warning">>>> No log file found for this task yet.</div>');
+                    }
+
+                    // 2. 加载完历史后再订阅 WebSocket 接收增量
+                    if (logSubscription) {
+                        logSubscription.unsubscribe();
+                    }
+                    
+                    logSubscription = stompClient.subscribe('/topic/logs/' + taskId, function (message) {
+                        // 如果当前还在看这个任务，就追加日志
+                        if (currentLogTaskId === taskId) {
+                            appendLogLine(message.body);
+                        }
+                    });
                 });
             });
 

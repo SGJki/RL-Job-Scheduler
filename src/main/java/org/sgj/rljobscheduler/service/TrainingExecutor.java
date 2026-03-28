@@ -20,10 +20,12 @@ import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import jakarta.annotation.PostConstruct;
 
 /**
@@ -75,7 +77,7 @@ public class TrainingExecutor {
     public CompletableFuture<Double> executeTraining(String taskId, int episodes) {
         LOG.info(">>> [TrainingExecutor] 启动训练任务: {}, 线程: {}", taskId, Thread.currentThread().getName());
         updateStatus(taskId, "RUNNING");
-        double finalReward = 0.0;
+        AtomicReference<Double> finalRewardRef = new AtomicReference<>(0.0);
         
         try {
             TrainingTask task = taskMapper.selectById(taskId);
@@ -101,28 +103,28 @@ public class TrainingExecutor {
 
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.directory(new File(System.getProperty("user.dir")));
-            pb.redirectErrorStream(true);
+            // 分离 stdout 和 stderr
+            pb.redirectErrorStream(false);
 
             Process process = pb.start();
             LOG.info(">>> [TrainingExecutor] Python 进程已启动, PID: {}", process.pid());
 
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    writeToSharedLog(taskId, line);
-                    if (line.startsWith("FINAL_REWARD:")) {
-                        try {
-                            finalReward = Double.parseDouble(line.split(":")[1]);
-                        } catch (Exception e) {
-                            LOG.warn(">>> [TrainingExecutor] 解析奖励值失败: {}", line);
-                        }
-                    }
-                }
-            }
+            // 异步消费 stdout 并写入 {taskId}.log
+            CompletableFuture<Void> stdoutFuture = CompletableFuture.runAsync(() -> {
+                consumeStream(process.getInputStream(), taskId, taskId + ".log", true, finalRewardRef);
+            });
+
+            // 异步消费 stderr 并写入 {taskId}error.log
+            CompletableFuture<Void> stderrFuture = CompletableFuture.runAsync(() -> {
+                consumeStream(process.getErrorStream(), taskId, taskId + "error.log", false, null);
+            });
 
             // 等待进程结束，设置 2 小时超时防止挂起
             boolean finished = process.waitFor(PROCESS_TIMEOUT_HOURS, TimeUnit.HOURS);
             
+            // 确保流消费线程也结束
+            CompletableFuture.allOf(stdoutFuture, stderrFuture).get(5, TimeUnit.SECONDS);
+
             if (finished) {
                 int exitCode = process.exitValue();
                 if (exitCode == 0) {
@@ -132,7 +134,7 @@ public class TrainingExecutor {
                     TrainingTask updateTask = taskMapper.selectById(taskId);
                     if (updateTask != null) {
                         updateTask.setStatus("COMPLETED");
-                        updateTask.setFinalReward(finalReward);
+                        updateTask.setFinalReward(finalRewardRef.get());
                         updateTask.setCompletedAt(LocalDateTime.now());
                         updateTask(updateTask);
                     }
@@ -154,7 +156,38 @@ public class TrainingExecutor {
             updateStatus(taskId, "FAILED");
         }
 
-        return CompletableFuture.completedFuture(finalReward);
+        return CompletableFuture.completedFuture(finalRewardRef.get());
+    }
+
+    /**
+     * 消费输入流并写入独立日志和共享日志
+     */
+    private void consumeStream(InputStream inputStream, String taskId, String fileName, boolean parseReward, AtomicReference<Double> rewardRef) {
+        File individualLogFile = new File("logs", fileName);
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+             PrintWriter individualWriter = new PrintWriter(new FileWriter(individualLogFile, true))) {
+            
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // 1. 写入独立日志文件 (不带 TaskID 前缀，保持干净)
+                individualWriter.println(line);
+                individualWriter.flush();
+
+                // 2. 写入全局共享日志文件 (带 TaskID 前缀，用于全局 Tailer)
+                writeToSharedLog(taskId, line);
+
+                // 3. 解析奖励 (仅在 stdout 且需要时)
+                if (parseReward && rewardRef != null && line.startsWith("FINAL_REWARD:")) {
+                    try {
+                        rewardRef.set(Double.parseDouble(line.split(":")[1]));
+                    } catch (Exception e) {
+                        LOG.warn(">>> [TrainingExecutor] 解析奖励值失败: {}", line);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOG.error(">>> [TrainingExecutor] 读取流异常: {}", fileName, e);
+        }
     }
     /**
      * 线程安全地写入共享日志文件

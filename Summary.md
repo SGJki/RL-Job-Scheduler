@@ -73,6 +73,7 @@
     *   **全局 Tailer**：使用 `Apache Commons IO` 的 `Tailer` 类，开启单线程异步监听 `logs/training.log` 文件。
     *   **正则解析**：`GlobalLogTailerListener` 通过正则捕获日志中的 `[TaskID]`。
     *   **精准广播**：利用 WebSocket 动态 Topic `/topic/logs/{taskId}`，将日志行推送到订阅该任务的前端控制台。
+    *   **历史回填 (History Backfill)**：新增 `GET /api/monitor/logs/{taskId}` 接口。前端打开日志窗口时，会先通过该接口加载已持久化的历史日志，加载完成后再自动切入 WebSocket 实时流模式，解决了“关闭弹窗再打开日志丢失”的问题。
     *   **前端渲染**：自定义深色控制台 UI，支持时间戳着色及自动滚动。
 
 ### 3.7 系统稳定性与监控 (Stability & Monitoring)
@@ -166,30 +167,42 @@ logs/
 ---
 
 ## 📺 Phase 8: 实时日志监控 (Log Streaming)
-> **目标**: 在网页上实现类似 `tail -f` 的效果，实时观看训练进度。
+> **目标**: 在网页上实现类似 `tail -f` 的效果，实时监控训练进度。
 
-### 1. 核心痛点
-- 目前只能去服务器翻 `logs/` 文件，或者等训练完了看结果，无法监控训练过程中的 Loss 变化。
+### 1. 技术实现细节
+*   **多流异步消费**:
+    *   `TrainingExecutor` 不再重定向错误流，而是利用 `CompletableFuture` 开启两个独立线程分别消费 Python 进程的 stdout 和 stderr。
+*   **日志持久化策略**:
+    *   **独立日志**: 每个任务生成 `logs/{taskId}.log` (标准输出) 和 `logs/{taskId}error.log` (错误输出)，保持原始输出纯净。
+    *   **聚合日志**: 所有流同步追加到 `logs/training.log`，并统一加上 `[时间戳] [TaskID]` 前缀。
+*   **实时推送 (WebSocket)**:
+    *   `GlobalLogTailerListener` 监听聚合日志文件，利用正则精准提取 TaskID 并广播至 `/topic/logs/{taskId}`。
+*   **前端控制台**:
+    *   自定义深色模态框 UI，支持日志着色、自动滚动及实时追加。
 
-### 2. 技术栈详解
-- **文件监听**: **Apache Commons IO (Tailer)** 或 **Java NIO (WatchService)**
-    - 实时监听 `logs/training_all.log` 文件的增量变化。
-- **推送通道**: **WebSocket (复用 Phase 7)**
-    - 建立专属频道 `/topic/logs/{taskId}`。
-- **前端展示**: **Xterm.js** (可选) 或简单的 `<pre>` 标签自动滚动。
-
-### 3. 实现流程
-1.  **日志分流**: 保持 Phase 5 的设计，Python 输出重定向到文件。
-2.  **监听器 (LogWatcher)**: Java 启动一个后台线程，使用 `Tailer` 监听特定任务的日志文件。
-3.  **增量推送**: 每当文件有新行写入，立即通过 WebSocket 推送给订阅了该 Task ID 的前端用户。
-4.  **前端渲染**: 收到日志行 -> 追加到页面 `<div id="console">` -> 自动滚动到底部。
+### 2. 系统稳定性增强
+*   **隔离线程池**: 引入 `trainingTaskExecutor` (核心4/最大8线程)，确保长耗时 RL 任务不阻塞 Web 服务。
+*   **进程超时杀灭**: 为 Python 进程设置 **2 小时** 强制超时，防止算法死循环导致僵尸进程积压。
+*   **健康监控**: 提供 `/api/monitor/health` 接口，实时输出线程池活跃度及队列积压情况。
 
 ---
 
-Closing non transactional SqlSession [org.apache.ibatis.session.defaults.DefaultSqlSession@2d113013]
-2026-03-12T01:00:43.992+08:00  WARN 892 --- [RL-Job-Scheduler] [nio-8080-exec-5] .w.s.m.s.DefaultHandlerExceptionResolver : Resolved [org.springframework.http.converter.HttpMessageNotReadableException: Required request body is missing: public org.springframework.http.ResponseEntity<?> org.sgj.rljobscheduler.controller.AuthController.register(java.lang.String,java.lang.String) throws java.lang.Exception]
+## 4. 目录结构说明
+```text
+src/main/java/org/sgj/rljobscheduler/
+├── config/             # SecurityConfig, WebSocketConfig, MybatisPlusConfig, AsyncConfig
+├── controller/         # WebController, TrainingController, AuthController, MonitorController
+├── dto/                # TrainingRequest, TrainingResult
+├── entity/             # TrainingTask, User
+├── mapper/             # TrainingTaskMapper, UserMapper
+├── service/            # TrainingService, TrainingExecutor, AuthService
+└── RlJobSchedulerApplication.java
 
-## ☁️ Phase 9: 分布式调度 (Distributed Scheduling & RPC)
+logs/
+├── training.log        # 聚合日志 (包含所有任务，用于实时推送)
+├── {taskId}.log        # 单个任务的标准输出日志
+└── {taskId}error.log   # 单个任务的错误输出日志
+```
 > **目标**: 将计算压力从 Web 服务器剥离，构建可横向扩展的算力集群。
 
 ### 1. 核心痛点
