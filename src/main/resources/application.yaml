@@ -5,6 +5,10 @@ logging:
 server:
   port: 8080
 
+rpc:
+  server:
+    port: 9000
+
 spring:
   application:
     name: RL-Job-Scheduler
@@ -13,6 +17,13 @@ spring:
     driverClassName: com.mysql.cj.jdbc.Driver
     username: root
     password: 599500
+  data:
+    redis:
+      host: localhost
+      port: 6379
+#      password: ${REDIS_PASSWORD:599500} # 默认为 599500，优先使用 REDIS_PASSWORD 环境变量
+      database: 0
+      timeout: 5000ms
   sql:
       init:
         mode: always
