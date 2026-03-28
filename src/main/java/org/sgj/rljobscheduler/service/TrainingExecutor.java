@@ -5,7 +5,9 @@ import org.sgj.rljobscheduler.mapper.TrainingTaskMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
+import org.apache.commons.io.input.Tailer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,115 +23,135 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PostConstruct;
 
 /**
  * 专门负责执行异步任务的执行器
- * 把耗时逻辑放在这里，避免 Self-Invocation 问题
  */
 @Service
 public class TrainingExecutor {
 
     private static final Logger LOG = LoggerFactory.getLogger(TrainingExecutor.class);
     private static final String LOG_FILE = "logs/training.log";
+    private static final long PROCESS_TIMEOUT_HOURS = 2; // 超时设置为 2 小时
+
     @Autowired
     private TrainingTaskMapper taskMapper;
+    @Autowired
+    private SimpMessagingTemplate messageTemplate;
+
+    private Tailer globalTailer;
+
     @PostConstruct
     public void init() {
         // 启动时检查日志文件
         File logDir = new File("logs");
         if (!logDir.exists()) {
-        boolean success = logDir.mkdir();
+            boolean success = logDir.mkdir();
+        }
 
-    }}
+        File logFile = new File(LOG_FILE);
+        if (!logFile.exists()) {
+            try {
+                logFile.createNewFile();
+            } catch (IOException e) {
+                LOG.error("创建日志文件失败", e);
+            }
+        }
 
-    @Async // 关键注解：告诉 Spring 这是一个异步方法，要丢给线程池跑
+        // 启动全局日志监听器
+        GlobalLogTailerListener listener = new GlobalLogTailerListener(messageTemplate);
+        // 每 1 秒轮询一次，从文件末尾开始读取 (true)
+        globalTailer = new Tailer(logFile, listener, 1000, true);
+        Thread tailerThread = new Thread(globalTailer);
+        tailerThread.setDaemon(true); // 守护线程，随应用关闭而关闭
+        tailerThread.setName("GlobalLogTailerThread");
+        tailerThread.start();
+        LOG.info(">>> 全局日志监控已启动: {}", LOG_FILE);
+    }
+
+    @Async("trainingTaskExecutor")
     public CompletableFuture<Double> executeTraining(String taskId, int episodes) {
-//        System.out.println("Start training task: " + taskId +  Thread.currentThread().getName());
-        LOG.info("Start training task: " + taskId);
+        LOG.info(">>> [TrainingExecutor] 启动训练任务: {}, 线程: {}", taskId, Thread.currentThread().getName());
         updateStatus(taskId, "RUNNING");
         double finalReward = 0.0;
-        boolean error = false;
-        // 2. 模拟耗时操作
-        // 1. 获取任务详情
-        try{
-        TrainingTask task = taskMapper.selectById(taskId);
-        if (task == null) return CompletableFuture.completedFuture(0.0);
-        Process process = null;
-        BufferedReader reader = null;
-
-        // 2. 构建 Python 命令
-        // python scripts/train.py --taskId xxx --algo PPO --episodes 1000 --lr 0.001
-        List<String> command = new ArrayList<>();
-        command.add("uv");
-        command.add("run");
-        command.add("python"); // 确保系统环境变量里有 python
-        command.add("scripts/train.py");
-        command.add("--taskId");
-        command.add(taskId);
-        command.add("--algo");
-        command.add(task.getAlgorithm());
-        command.add("--episodes");
-        command.add(String.valueOf(episodes));
-        command.add("--lr");
-        command.add(String.valueOf(task.getLearningRate()));
-
-        ProcessBuilder pb = new ProcessBuilder(command);
-        pb.directory(new File("C:\\Users\\13253\\dataDisk\\java_code\\Welcome\\RL-Job-Scheduler"));
-        pb.redirectErrorStream(true);
-
-        // 3. 启动进程
+        
         try {
-            process = pb.start();
+            TrainingTask task = taskMapper.selectById(taskId);
+            if (task == null) {
+                LOG.error(">>> [TrainingExecutor] 任务不存在: {}", taskId);
+                return CompletableFuture.completedFuture(0.0);
+            }
 
-            try {
-                reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+            // 构建 Python 命令
+            List<String> command = new ArrayList<>();
+            command.add("uv");
+            command.add("run");
+            command.add("python");
+            command.add("scripts/train.py");
+            command.add("--taskId");
+            command.add(taskId);
+            command.add("--algo");
+            command.add(task.getAlgorithm());
+            command.add("--episodes");
+            command.add(String.valueOf(episodes));
+            command.add("--lr");
+            command.add(String.valueOf(task.getLearningRate()));
+
+            ProcessBuilder pb = new ProcessBuilder(command);
+            pb.directory(new File(System.getProperty("user.dir")));
+            pb.redirectErrorStream(true);
+
+            Process process = pb.start();
+            LOG.info(">>> [TrainingExecutor] Python 进程已启动, PID: {}", process.pid());
+
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    // 写入共享日志文件 (带上 TaskID 前缀)
                     writeToSharedLog(taskId, line);
-
-                    // 解析关键结果
                     if (line.startsWith("FINAL_REWARD:")) {
                         try {
                             finalReward = Double.parseDouble(line.split(":")[1]);
-                        } catch (NumberFormatException e) {
-                            writeToSharedLog(taskId, "[Error] 解析 Reward 失败: " + line);
-                        }}}}catch (Exception e) {
-                    e.printStackTrace();
-                    error = true;
-                }finally {
-                reader.close();
+                        } catch (Exception e) {
+                            LOG.warn(">>> [TrainingExecutor] 解析奖励值失败: {}", line);
+                        }
+                    }
                 }
+            }
 
-            int exitCode = process.waitFor();
-            if (exitCode == 0) {
-                LOG.info(">>> [后台线程] Python 脚本执行成功: {}", taskId);
-                writeToSharedLog(taskId, ">>> Task Completed Successfully");
-                // 更新数据库 (需要重新查询以确保数据最新)
-                TrainingTask updateTask = taskMapper.selectById(taskId);
-                if (updateTask != null) {
-                    updateTask.setStatus("COMPLETED");
-                    updateTask.setFinalReward(finalReward);
-                    updateTask.setCompletedAt(LocalDateTime.now());
-                    taskMapper.updateById(updateTask);
-                }}
-             else {
-                LOG.error(">>> [后台线程] Python 脚本异常退出, Code: {}", exitCode);
-                writeToSharedLog(taskId, ">>> Task Failed with Exit Code: " + exitCode);
+            // 等待进程结束，设置 2 小时超时防止挂起
+            boolean finished = process.waitFor(PROCESS_TIMEOUT_HOURS, TimeUnit.HOURS);
+            
+            if (finished) {
+                int exitCode = process.exitValue();
+                if (exitCode == 0) {
+                    LOG.info(">>> [TrainingExecutor] 任务执行成功: {}", taskId);
+                    writeToSharedLog(taskId, ">>> 任务成功完成");
+                    
+                    TrainingTask updateTask = taskMapper.selectById(taskId);
+                    if (updateTask != null) {
+                        updateTask.setStatus("COMPLETED");
+                        updateTask.setFinalReward(finalReward);
+                        updateTask.setCompletedAt(LocalDateTime.now());
+                        updateTask(updateTask);
+                    }
+                } else {
+                    LOG.error(">>> [TrainingExecutor] 进程异常退出, ExitCode: {}", exitCode);
+                    writeToSharedLog(taskId, ">>> 任务失败，退出码: " + exitCode);
+                    updateStatus(taskId, "FAILED");
+                }
+            } else {
+                // 超时强制杀灭
+                LOG.warn(">>> [TrainingExecutor] 任务执行超时（{} 小时），正在强制终止: {}", PROCESS_TIMEOUT_HOURS, taskId);
+                process.destroyForcibly();
+                writeToSharedLog(taskId, ">>> [Timeout] 任务因执行超过 " + PROCESS_TIMEOUT_HOURS + " 小时被系统强制终止");
                 updateStatus(taskId, "FAILED");
             }
-        }
-        catch (IOException e){
-            e.printStackTrace();
-        }finally {
-            // 4. 释放资源
-            if(process!= null){
-                process.destroy();
-            }}
-        }catch (Exception e) {
-            e.printStackTrace();
-            error = true;
+        } catch (Exception e) {
+            LOG.error(">>> [TrainingExecutor] 任务运行异常: {}", taskId, e);
+            writeToSharedLog(taskId, ">>> [Error] 系统异常: " + e.getMessage());
+            updateStatus(taskId, "FAILED");
         }
 
         return CompletableFuture.completedFuture(finalReward);
@@ -154,6 +176,16 @@ public class TrainingExecutor {
         if (task != null) {
             task.setStatus(status);
             taskMapper.updateById(task);
+            // WebSocket 推送
+            messageTemplate.convertAndSend("/topic/tasks", task);
+        }
+    }
+
+    private void updateTask(TrainingTask task) {
+        if (task != null) {
+            taskMapper.updateById(task);
+            // WebSocket 推送
+            messageTemplate.convertAndSend("/topic/tasks", task);
         }
     }
 }

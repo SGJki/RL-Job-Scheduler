@@ -12,53 +12,150 @@
         .status-RUNNING { color: #0d6efd; font-weight: bold; }
         .status-COMPLETED { color: #198754; font-weight: bold; }
         .status-FAILED { color: #dc3545; font-weight: bold; }
+        #logConsole {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Courier New', Courier, monospace;
+            padding: 10px;
+            height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            font-size: 13px;
+            border-radius: 4px;
+        }
+        .log-line { margin-bottom: 2px; border-bottom: 1px solid #333; padding-bottom: 2px; }
+        .log-timestamp { color: #569cd6; margin-right: 5px; }
+        .log-taskid { color: #ce9178; margin-right: 5px; font-weight: bold; }
     </style>
     <!-- 引入 jQuery 方便做 AJAX -->
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <!-- 引入 Bootstrap JS (用于弹窗) -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- 引入 SockJS 和 Stomp (用于 WebSocket) -->
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
     <script>
         $(document).ready(function() {
             var currentPage = 1;
+            var stompClient = null;
+            var logSubscription = null;
+            var currentLogTaskId = null;
 
-            // 自动刷新函数
+            // 自动刷新函数 (用于翻页或初始化)
             function refreshTable() {
                 $.get('/tasks/fragment?page=' + currentPage, function(data) {
                     $('#task-table-container').replaceWith(data);
                 });
             }
 
-            // AJAX 提交表单
-            $('#trainingForm').on('submit', function(e) {
-                e.preventDefault(); // 阻止默认的表单跳转
-                console.log("Submitting form via AJAX...");
+            // WebSocket 连接与监听
+            function connectWebSocket() {
+                var socket = new SockJS('/ws');
+                stompClient = Stomp.over(socket);
 
-                $.post($(this).attr('action'), $(this).serialize(), function(result) {
-                    console.log("Success! Result:", result);
+                // 禁用详细日志
+                stompClient.debug = null;
 
-                    // 弹窗显示成功消息
+                stompClient.connect({}, function (frame) {
+                    console.log('Connected: ' + frame);
+
+                    // 订阅任务状态更新频道
+                    stompClient.subscribe('/topic/tasks', function (message) {
+                        var task = JSON.parse(message.body);
+                        // ... (现有逻辑保持不变)
+                        var row = $('#row-' + task.id);
+                        if (row.length > 0) {
+                            row.find('.status-badge').text(task.status)
+                                .removeClass('status-PENDING status-RUNNING status-COMPLETED status-FAILED')
+                                .addClass('status-' + task.status);
+                            row.find('.reward-value').text(task.finalReward.toFixed(4));
+                            if (task.completedAt) {
+                                row.find('.completed-at').text(task.completedAt.replace('T', ' '));
+                            }
+                        } else if (currentPage === 1) {
+                            refreshTable();
+                        }
+                    });
+                }, function (error) {
+                    console.error("WebSocket error:", error);
+                    setTimeout(connectWebSocket, 5000);
+                });
+            }
+
+            // 启动 WebSocket
+            connectWebSocket();
+
+            // 处理日志弹窗
+            $(document).on('click', '.view-log-btn', function() {
+                var taskId = $(this).data('taskid');
+                currentLogTaskId = taskId;
+                
+                // 清空控制台
+                $('#logConsole').empty();
+                $('#logModalTitle').text("Real-time Logs: " + taskId);
+                
+                // 显示弹窗
+                var logModal = new bootstrap.Modal(document.getElementById('logModal'));
+                logModal.show();
+
+                // 订阅该任务的日志频道
+                if (logSubscription) {
+                    logSubscription.unsubscribe();
+                }
+                
+                logSubscription = stompClient.subscribe('/topic/logs/' + taskId, function (message) {
+                    appendLogLine(message.body);
+                });
+            });
+
+            // 弹窗关闭时取消订阅
+            $('#logModal').on('hidden.bs.modal', function () {
+                if (logSubscription) {
+                    logSubscription.unsubscribe();
+                    logSubscription = null;
+                }
+                currentLogTaskId = null;
+            });
+
+            function appendLogLine(line) {
+                var console = $('#logConsole');
+                
+                // 简单的正则解析: [时间] [TaskID] 内容
+                // 匹配格式如: [2026-03-28T10:40:28.123] [task-123] ...
+                var regex = /^\[(.*?)\] \[(.*?)\] (.*)$/;
+                var match = line.match(regex);
+                
+                var html = '<div class="log-line">';
+                if (match) {
+                    html += '<span class="log-timestamp">[' + match[1] + ']</span>';
+                    html += '<span class="log-taskid">[' + match[2] + ']</span>';
+                    html += '<span style="color: #ffffff;">' + match[3] + '</span>';
+                } else {
+                    html += '<span style="color: #ffffff;">' + line + '</span>';
+                }
+                html += '</div>';
+                
+                console.append(html);
+                
+                // 自动滚动到底部
+                console.scrollTop(console[0].scrollHeight);
+            }
+
+            // 绑定按钮点击事件，替代 submit 事件
+            $('#submitBtn').click(function() {
+                var form = $('#trainingForm');
+                $.post('/submit', form.serialize(), function(result) {
                     var modalEl = document.getElementById('messageModal');
                     if (modalEl) {
                         var myModal = new bootstrap.Modal(modalEl);
                         $('#modalMessageContent').text("任务已创建，准备后台执行: " + result.taskId);
                         myModal.show();
-                    } else {
-                        console.error("Modal element #messageModal not found!");
-                        alert("任务已创建: " + result.taskId); // 降级处理
                     }
-
-                    // 立即刷新列表
                     refreshTable();
-                }).fail(function(xhr, status, error) {
-                    console.error("AJAX Error:", status, error);
-                    alert("Submission failed. Check console for details.");
                 });
             });
 
-            // 每 3 秒执行一次局部刷新
-            setInterval(refreshTable, 3000);
-
-            // 处理分页点击事件 (使用事件委托，因为分页按钮是动态加载的)
+            // 处理分页点击事件
             $(document).on('click', '.page-link', function(e) {
                 e.preventDefault();
                 var page = $(this).data('page');
@@ -96,11 +193,12 @@
             🚀 Create New Training Task
         </div>
         <div class="card-body">
-            <form id="trainingForm" action="#" th:action="@{/submit}" th:object="${request}" method="post">
+            <!-- 移除 action 和 th:action，改为纯 JS 控制 -->
+            <form id="trainingForm">
                 <div class="row mb-3">
                     <div class="col-md-4">
                         <label class="form-label">Algorithm</label>
-                        <select class="form-select" th:field="*{algorithm}">
+                        <select class="form-select" name="algorithm">
                             <option value="PPO">PPO (Proximal Policy Optimization)</option>
                             <option value="DQN">DQN (Deep Q-Network)</option>
                             <option value="A2C">A2C (Advantage Actor-Critic)</option>
@@ -108,14 +206,15 @@
                     </div>
                     <div class="col-md-4">
                         <label class="form-label">Episodes</label>
-                        <input type="number" class="form-control" th:field="*{episodes}" value="1000" min="100" max="10000">
+                        <input type="number" class="form-control" name="episodes" value="1000" min="100" max="10000">
                     </div>
                     <div class="col-md-4">
                         <label class="form-label">Learning Rate</label>
-                        <input type="number" step="0.0001" class="form-control" th:field="*{learningRate}" value="0.001">
+                        <input type="number" step="0.0001" class="form-control" name="learningRate" value="0.001">
                     </div>
                 </div>
-                <button type="submit" class="btn btn-success w-100">Start Training</button>
+                <!-- type="button" 彻底防止表单默认提交 -->
+                <button type="button" id="submitBtn" class="btn btn-success w-100">Start Training</button>
             </form>
         </div>
     </div>
@@ -138,20 +237,27 @@
                         <th>Status</th>
                         <th>Final Reward</th>
                         <th>Created At</th>
+                        <th>Actions</th>
                     </tr>
                     </thead>
                     <tbody id="task-table-body">
-                    <tr th:each="task : ${taskPage.records}">
+                    <tr th:each="task : ${taskPage.records}" th:id="'row-' + ${task.id}">
                         <td th:text="${task.id}">12345</td>
                         <td th:text="${task.algorithm}">PPO</td>
                         <td th:text="${task.episodes}">1000</td>
                         <td th:text="${task.learningRate}">0.001</td>
                         <td>
                                 <span th:text="${task.status}"
-                                      th:class="'status-' + ${task.status}">COMPLETED</span>
+                                      class="status-badge"
+                                      th:classappend="'status-' + ${task.status}">COMPLETED</span>
                         </td>
-                        <td th:text="${#numbers.formatDecimal(task.finalReward, 1, 2)}">95.50</td>
+                        <td class="reward-value" th:text="${#numbers.formatDecimal(task.finalReward, 1, 4)}">95.50</td>
                         <td th:text="${#temporals.format(task.createdAt, 'yyyy-MM-dd HH:mm:ss')}">2023-10-01 12:00:00</td>
+                        <td>
+                            <button class="btn btn-outline-info btn-sm view-log-btn" th:data-taskid="${task.id}">
+                                📜 View Logs
+                            </button>
+                        </td>
                     </tr>
                     <tr th:if="${#lists.isEmpty(taskPage.records)}">
                         <td colspan="7" class="text-center text-muted">No tasks found. Start one above!</td>
@@ -178,6 +284,24 @@
                         </li>
                     </ul>
                 </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Log Modal -->
+<div class="modal fade" id="logModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title" id="logModalTitle">Real-time Logs</h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body bg-dark">
+                <div id="logConsole"></div>
+            </div>
+            <div class="modal-footer bg-dark">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
             </div>
         </div>
     </div>

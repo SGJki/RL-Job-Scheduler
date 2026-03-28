@@ -29,19 +29,11 @@ public class SecurityConfig {
 //                .anyRequest().authenticated();
         http.csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-//        http.authorizeHttpRequests(HttpSecurity::antMatchers("/api/auth/**","/login"))
-                // 放行登录和hello
-//                .antMatchers("/api/auth/**").permitAll()
-                // 授权规则
-//                .authorizeRequests(auth -> auth
-//                        // 放行登录和注册接口
-//                        .antMatchers("/api/auth/**").permitAll()
-//                        // 放行静态资源 (根据实际情况调整)
-//                        .antMatchers("/css/**", "/js/**", "/images/**", "/favicon.ico").permitAll()
-//                        // 其他所有请求都需要认证
-//                        .anyRequest().authenticated()
-//                )
-                // 将 JWT 过滤器添加到 UsernamePasswordAuthenticationFilter 之前
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/**", "/login", "/ws/**", "/h2-console/**").permitAll()
+                        .requestMatchers("/api/monitor/**").permitAll() // 暂时放行监控接口
+                        .anyRequest().permitAll() // 暂时全部放行以便测试，实际生产应改为 authenticated()
+                )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
 

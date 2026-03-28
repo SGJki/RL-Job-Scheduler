@@ -47,9 +47,12 @@ public class TrainingService {
 
         future.exceptionally(e -> {
             System.out.println(">>> [TrainingService]"+ taskId + " 任务失败, 错误信息: " + e.getMessage());
-            task.setStatus("FAILED");
-            task.setErrorMessage(e.getMessage());
-            taskMapper.insert(task);
+            TrainingTask updateTask = taskMapper.selectById(taskId);
+            if (updateTask != null) {
+                updateTask.setStatus("FAILED");
+                updateTask.setErrorMessage(e.getMessage());
+                taskMapper.updateById(updateTask);
+            }
             return null;
         });
         future.thenAccept(reward -> {
