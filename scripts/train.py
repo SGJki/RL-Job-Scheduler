@@ -19,9 +19,10 @@ def main():
     sys.stdout.flush() # 确保日志立即输出
 
     # 3. 模拟训练过程
+    # total_steps = args.episodes/10
     total_steps = 5
     for i in range(total_steps):
-        time.sleep(1) # 模拟耗时
+        time.sleep(random.uniform(0.5, 1.5)) # 模拟耗时
         progress = (i + 1) / total_steps * 100
         print(f"[Python] Progress: {progress:.0f}%")
         sys.stdout.flush()

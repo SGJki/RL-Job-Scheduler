@@ -41,13 +41,26 @@ this is a web Service for RL training manager
         - 任务列表自动刷新 (Auto-refresh)
         - 分页查询 (Pagination)
 
-- [ ] **Phase 5: 真实算法集成 (Real RL Integration)**
+- [x] **Phase 5: 真实算法集成 (Real RL Integration)**
     - Java `ProcessBuilder` 调用 Python 脚本
     - 实时日志流处理 (stdout/stderr 合并)
     - 共享日志文件 (`logs/training.log`)
     - 结果解析与数据库回写
 
-## 🛠️ 技术栈 (Tech Stack)
+- [x] **Phase 6: 统一认证与授权 (Security)**
+    - 框架: **Spring Security**
+    - 认证方式: **JWT (JSON Web Token)**
+    - 权限模型: **RBAC** (用户隔离)
+
+- [x] **Phase 7: 实时交互优化 (Real-time Interaction)**
+    - 协议: **WebSocket (STOMP)**
+    - 后端推送: `SimpMessagingTemplate`
+    - 前端同步: `SockJS` + `Stomp.js` (无刷新更新状态)
+
+- [ ] **Phase 8: 实时日志监控 (Log Streaming)**
+    - 文件监听: `Apache Commons IO (Tailer)`
+    - 推送通道: WebSocket (复用)
+    - 前端展示: 自动滚动日志控制台
 
 - **Backend**: Java 17, Spring Boot 4.0.3
 - **Database**: MySQL 8.0.33
