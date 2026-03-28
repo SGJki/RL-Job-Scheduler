@@ -22,7 +22,7 @@ def main():
     total_steps = args.episodes
     # total_steps = 5
     # for i in range(total_steps):
-    for i in range(total_steps):
+    for i in range(5):
         time.sleep(1)# 模拟耗时
         progress = (i + 1) / total_steps * 100
         print(f"[Python] Progress: {progress:.0f}%")

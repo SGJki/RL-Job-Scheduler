@@ -28,7 +28,7 @@ public class MasterNettyServer {
 
     private static final Logger LOG = LoggerFactory.getLogger(MasterNettyServer.class);
 
-    @Value("${rpc.server.enabled:true}")
+    @Value("${rpc.server.enabled:${RPC_SERVER_ENABLED:true}}")
     private boolean enabled;
 
     @Value("${rpc.server.port:9000}")

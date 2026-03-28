@@ -9,6 +9,7 @@ import org.sgj.rljobscheduler.common.proto.*;
 import io.netty.util.AttributeKey;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
+import org.sgj.rljobscheduler.master.service.SchedulerService;
 import org.sgj.rljobscheduler.master.service.LogManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,9 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
 
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
+
+    @Autowired
+    private SchedulerService schedulerService;
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
@@ -99,6 +103,8 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
         if (currentTaskId != null && !currentTaskId.isEmpty()) {
             String taskKey = "worker:" + workerId + ":task";
             redisTemplate.expire(taskKey, 120, TimeUnit.SECONDS);
+        } else {
+            schedulerService.tryDispatchQueuedTaskToWorker(workerId);
         }
         
         // 记录 Worker 元数据 (可选)
@@ -148,6 +154,7 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
                 String taskKey = "worker:" + workerId + ":task";
                 redisTemplate.delete(taskKey);
                 LOG.info(">>> 任务结束，已释放 Worker [{}]", workerId);
+                schedulerService.tryDispatchQueuedTaskToWorker(workerId);
             }
         }
     }
