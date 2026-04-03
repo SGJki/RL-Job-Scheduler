@@ -19,6 +19,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -90,27 +91,81 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
         String workerId = req.getWorkerId();
         // 绑定 workerId 到 Channel 属性
         ctx.channel().attr(WORKER_ID_KEY).set(workerId);
-        
+
         // 注册到 ChannelManager
         channelManager.register(workerId, ctx.channel());
-        
+
         // 存储心跳到 Redis，有效期 30 秒
         String hbKey = "worker:" + workerId + ":hb";
         redisTemplate.opsForValue().set(hbKey, "alive", 30, TimeUnit.SECONDS);
-        
+
         // 如果有正在运行的任务，续期 TaskIDKey (2 分钟)
         String currentTaskId = req.getCurrentTaskId();
         if (currentTaskId != null && !currentTaskId.isEmpty()) {
             String taskKey = "worker:" + workerId + ":task";
             redisTemplate.expire(taskKey, 120, TimeUnit.SECONDS);
             schedulerService.renewTaskOwnerTtl(currentTaskId);
+
+            // 检查 taskOwnerKey 是否匹配（若不匹配说明任务已完成但通知丢失，或调度被中断）
+            String ownerKey = "task:" + currentTaskId + ":workerId";
+            String ownerWorkerId = redisTemplate.opsForValue().get(ownerKey);
+            if (ownerWorkerId == null || !ownerWorkerId.equals(workerId)) {
+                // taskOwnerKey 缺失或不匹配 → 任务已完成但 Master 未收到通知，或调度被中断
+                TrainingTask task = taskMapper.selectById(currentTaskId);
+                if (task != null && "RUNNING".equals(task.getStatus())) {
+                    task.setStatus("COMPLETED");
+                    task.setCompletedAt(LocalDateTime.now());
+                    taskMapper.updateById(task);
+                    LOG.info(">>> [Heartbeat] 任务 [{}] 实际已完成（通知丢失），强制标记为 COMPLETED", currentTaskId);
+                    messagingTemplate.convertAndSend("/topic/tasks", task);
+                }
+                // 尝试分发新任务
+                schedulerService.tryDispatchQueuedTaskToWorker(workerId);
+            }
         } else {
+            // currentTaskId 为空 → Worker 空闲，尝试分发新任务
+            // 同时检查是否有因通知丢失而仍为 RUNNING 的任务
+            checkAndFixStaleRunningTasks(workerId);
             schedulerService.tryDispatchQueuedTaskToWorker(workerId);
         }
-        
+
         // 记录 Worker 元数据 (可选)
         String metaKey = "worker:" + workerId + ":meta";
         redisTemplate.opsForValue().set(metaKey, String.format("GPUs:%d, CPU:%.2f", req.getAvailableGpus(), req.getCpuUsage()));
+    }
+
+    private void checkAndFixStaleRunningTasks(String workerId) {
+        // 当 Worker 空闲但 DB 中有该 Worker 的 RUNNING 任务时，
+        // 说明任务已完成但通知丢失，将任务标记为 COMPLETED
+        try {
+            Set<String> keys = redisTemplate.keys("task:*:workerId");
+            if (keys == null) {
+                return;
+            }
+            for (String key : keys) {
+                String ownerWorkerId = redisTemplate.opsForValue().get(key);
+                if (workerId.equals(ownerWorkerId)) {
+                    // 找到该 Worker 的任务，检查 task:{taskId}:workerId 是否仍存在
+                    String taskIdFromKey = key.replace("task:", "").replace(":workerId", "");
+                    String taskKey = "worker:" + workerId + ":task";
+                    Boolean taskKeyExists = redisTemplate.hasKey(taskKey);
+                    if (taskKeyExists == null || !taskKeyExists) {
+                        // taskKey 不存在说明 Worker 已清空（任务完成），但 taskOwnerKey 还在
+                        TrainingTask task = taskMapper.selectById(taskIdFromKey);
+                        if (task != null && "RUNNING".equals(task.getStatus())) {
+                            task.setStatus("COMPLETED");
+                            task.setCompletedAt(LocalDateTime.now());
+                            taskMapper.updateById(task);
+                            schedulerService.releaseTaskOwner(taskIdFromKey);
+                            LOG.info(">>> [Heartbeat] 修复孤立 RUNNING 任务 [{}] -> COMPLETED", taskIdFromKey);
+                            messagingTemplate.convertAndSend("/topic/tasks", task);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warn(">>> [Heartbeat] 检查 stale 任务失败: {}", e.getMessage());
+        }
     }
 
     private void handleTaskResponse(ExecuteTaskResponse resp) {
