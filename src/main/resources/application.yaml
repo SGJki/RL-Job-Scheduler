@@ -20,6 +20,10 @@ scheduler:
     enabled: ${SCHEDULER_RECONCILE_ENABLED:true}
     fixed-delay-ms: ${SCHEDULER_RECONCILE_DELAY_MS:2000}
     batch-size: ${SCHEDULER_RECONCILE_BATCH_SIZE:20}
+  recover:
+    enabled: ${SCHEDULER_RECOVER_ENABLED:true}
+    fixed-delay-ms: ${SCHEDULER_RECOVER_DELAY_MS:5000}
+    batch-size: ${SCHEDULER_RECOVER_BATCH_SIZE:20}
 
 spring:
   application:

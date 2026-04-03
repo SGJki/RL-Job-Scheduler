@@ -32,6 +32,8 @@ public class SchedulerService {
     private static final String DEFAULT_QUEUE_LIST_KEY = "scheduler:queue:tasks";
     private static final String DEFAULT_QUEUE_SET_KEY = "scheduler:queue:tasks:set";
     private static final String DEFAULT_TASK_TRACE_KEY_PREFIX = "task:";
+    private static final String DEFAULT_TASK_WORKER_SUFFIX = ":workerId";
+    private static final String DEFAULT_TASK_ATTEMPT_SUFFIX = ":currentAttempt";
 
     @Autowired
     private StringRedisTemplate redisTemplate;
@@ -79,6 +81,7 @@ public class SchedulerService {
                 
                 // 2. 尝试抢占 (Lua 脚本保证原子性)
                 if (tryPreemptWorker(workerId, task.getId())) {
+                    registerTaskOwner(workerId, task.getId());
                     // 3. 抢占成功，通过 Netty 下发任务
                     return dispatchTask(workerId, task, effectiveTraceId);
                 }
@@ -119,6 +122,8 @@ public class SchedulerService {
                     return false;
                 }
 
+                registerTaskOwner(workerId, taskId);
+
                 String traceId = redisTemplate.opsForValue().get(taskTraceKey(taskId));
                 if (traceId == null || traceId.isBlank()) {
                     traceId = "unknown";
@@ -126,6 +131,7 @@ public class SchedulerService {
 
                 boolean dispatched = dispatchTask(workerId, task, traceId);
                 if (!dispatched) {
+                    releaseTaskOwner(taskId);
                     enqueueIfEnabled(taskId);
                     return false;
                 }
@@ -147,6 +153,39 @@ public class SchedulerService {
         enqueueIfEnabled(taskId);
     }
 
+    public void registerTaskOwner(String workerId, String taskId) {
+        if (workerId == null || workerId.isBlank() || taskId == null || taskId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.opsForValue().set(taskWorkerKey(taskId), workerId, 120, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            LOG.error(">>> [SchedulerService] 记录任务 owner 失败: {}", e.getMessage());
+        }
+    }
+
+    public void releaseTaskOwner(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.delete(taskWorkerKey(taskId));
+        } catch (Exception e) {
+            LOG.error(">>> [SchedulerService] 释放任务 owner 失败: {}", e.getMessage());
+        }
+    }
+
+    public void renewTaskOwnerTtl(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return;
+        }
+        try {
+            redisTemplate.expire(taskWorkerKey(taskId), 120, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            LOG.error(">>> [SchedulerService] 续期任务 owner 失败: {}", e.getMessage());
+        }
+    }
+
     private void enqueueIfEnabled(String taskId) {
         if (!queueEnabled) {
             return;
@@ -166,6 +205,14 @@ public class SchedulerService {
 
     private String taskTraceKey(String taskId) {
         return DEFAULT_TASK_TRACE_KEY_PREFIX + taskId + ":traceId";
+    }
+
+    private String taskWorkerKey(String taskId) {
+        return DEFAULT_TASK_TRACE_KEY_PREFIX + taskId + DEFAULT_TASK_WORKER_SUFFIX;
+    }
+
+    private String taskAttemptKey(String taskId) {
+        return DEFAULT_TASK_TRACE_KEY_PREFIX + taskId + DEFAULT_TASK_ATTEMPT_SUFFIX;
     }
 
     private boolean tryPreemptWorker(String workerId, String taskId) {
@@ -195,15 +242,18 @@ public class SchedulerService {
             LOG.error(">>> Worker [{}] 已掉线，抢占失败", workerId);
             // 清理已设置的任务 Key
             redisTemplate.delete("worker:" + workerId + ":task");
+            releaseTaskOwner(task.getId());
             return false;
         }
 
+        int attempt = allocateAttempt(task.getId());
         ExecuteTaskRequest req = ExecuteTaskRequest.newBuilder()
                 .setTaskId(task.getId())
                 .setAlgorithm(task.getAlgorithm())
                 .setEpisodes(task.getEpisodes())
                 .setLearningRate(task.getLearningRate())
                 .setTraceId(traceId)
+                .setAttempt(attempt)
                 .build();
 
         NettyMessage message = new NettyMessage();
@@ -211,7 +261,43 @@ public class SchedulerService {
         message.setBody(req);
 
         channel.writeAndFlush(message);
-        LOG.info(">>> 任务 [{}] 已下发给 Worker [{}]", task.getId(), workerId);
+        LOG.info(">>> 任务 [{}] 已下发给 Worker [{}], attempt={}", task.getId(), workerId, attempt);
         return true;
+    }
+
+    public int getCurrentAttempt(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return 0;
+        }
+        try {
+            String raw = redisTemplate.opsForValue().get(taskAttemptKey(taskId));
+            if (raw == null || raw.isBlank()) {
+                return 0;
+            }
+            return Integer.parseInt(raw);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int allocateAttempt(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return 0;
+        }
+        try {
+            Long attempt = redisTemplate.opsForValue().increment(taskAttemptKey(taskId));
+            if (attempt != null && attempt == 1L) {
+                redisTemplate.expire(taskAttemptKey(taskId), 1, TimeUnit.DAYS);
+            }
+            if (attempt == null) {
+                return 0;
+            }
+            if (attempt > Integer.MAX_VALUE) {
+                return Integer.MAX_VALUE;
+            }
+            return attempt.intValue();
+        } catch (Exception e) {
+            return 0;
+        }
     }
 }
