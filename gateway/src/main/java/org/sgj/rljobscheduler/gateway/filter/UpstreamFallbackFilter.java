@@ -1,5 +1,7 @@
 package org.sgj.rljobscheduler.gateway.filter;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.sgj.rljobscheduler.gateway.config.FallbackProperties;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -21,9 +23,11 @@ import java.util.Map;
 public class UpstreamFallbackFilter implements GlobalFilter, Ordered {
 
     private final FallbackProperties properties;
+    private final ObjectMapper objectMapper;
 
-    public UpstreamFallbackFilter(FallbackProperties properties) {
+    public UpstreamFallbackFilter(FallbackProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -72,32 +76,18 @@ public class UpstreamFallbackFilter implements GlobalFilter, Ordered {
 
         exchange.getResponse().setStatusCode(HttpStatus.SERVICE_UNAVAILABLE);
         exchange.getResponse().getHeaders().setContentType(MediaType.APPLICATION_JSON);
-        String body = toJson(Map.of(
-                "status", "SERVICE_UNAVAILABLE",
-                "message", "Upstream service unavailable",
-                "traceId", traceId
-        ));
+        String body;
+        try {
+            body = objectMapper.writeValueAsString(Map.of(
+                    "status", "SERVICE_UNAVAILABLE",
+                    "message", "Upstream service unavailable",
+                    "traceId", traceId
+            ));
+        } catch (JsonProcessingException e) {
+            body = "{\"status\":\"SERVICE_UNAVAILABLE\",\"message\":\"Upstream service unavailable\"}";
+        }
         DataBuffer buffer = exchange.getResponse().bufferFactory().wrap(body.getBytes(StandardCharsets.UTF_8));
         return exchange.getResponse().writeWith(Mono.just(buffer));
-    }
-
-    private String toJson(Map<String, String> map) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{");
-        boolean first = true;
-        for (Map.Entry<String, String> e : map.entrySet()) {
-            if (!first) sb.append(",");
-            first = false;
-            sb.append("\"").append(escape(e.getKey())).append("\":");
-            sb.append("\"").append(escape(e.getValue())).append("\"");
-        }
-        sb.append("}");
-        return sb.toString();
-    }
-
-    private String escape(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     @Override

@@ -1,6 +1,7 @@
 package org.sgj.rljobscheduler.master.config;
 
 import org.sgj.rljobscheduler.master.utils.JwtUtils;
+import org.sgj.rljobscheduler.common.SignatureUtils;
 import io.jsonwebtoken.Claims;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,8 +11,6 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -69,8 +68,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 }
             }
         }
-        if (token != null && jwtUtils.validateToken(token)) {
-            Claims claims = jwtUtils.parseToken(token);
+        Claims claims = null;
+        if (token != null) {
+            claims = jwtUtils.validateAndParse(token);
+        }
+        if (claims != null) {
             String username = claims.getSubject();
             String role = claims.get("role", String.class);
             Long userId = claims.get("userId", Long.class);
@@ -137,8 +139,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         String payload = request.getMethod() + "\n" + request.getRequestURI() + "\n" + traceId + "\n" + tsHeader;
-        String expected = hmacSha256Hex(secret.getBytes(StandardCharsets.UTF_8), payload);
-        if (expected.isBlank()) {
+        String expected;
+        try {
+            expected = SignatureUtils.hmacSha256Hex(secret.getBytes(StandardCharsets.UTF_8), payload);
+        } catch (IllegalStateException e) {
             return false;
         }
         if (!MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), sigHeader.getBytes(StandardCharsets.UTF_8))) {
@@ -170,20 +174,5 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         if (path.startsWith("/h2-console")) return false;
         if (path.startsWith("/api/monitor/")) return false;
         return true;
-    }
-
-    private String hmacSha256Hex(byte[] secretBytes, String payload) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(secretBytes, "HmacSHA256"));
-            byte[] bytes = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            return "";
-        }
     }
 }

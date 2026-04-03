@@ -16,7 +16,6 @@ import java.io.IOException;
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
-import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 
 import java.io.BufferedReader;
@@ -36,7 +35,11 @@ public class TrainingExecutor {
 
     private static final Logger LOG = LoggerFactory.getLogger(TrainingExecutor.class);
     private static final String LOG_FILE = "logs/training.log";
-    private static final long PROCESS_TIMEOUT_HOURS = 2; // 超时设置为 2 小时
+    private static final long PROCESS_TIMEOUT_HOURS = 2;
+
+    private static final String STATUS_RUNNING = "RUNNING";
+    private static final String STATUS_COMPLETED = "COMPLETED";
+    private static final String STATUS_FAILED = "FAILED"; // 超时设置为 2 小时
 
     @Autowired
     private TrainingTaskMapper taskMapper;
@@ -50,7 +53,7 @@ public class TrainingExecutor {
         // 启动时检查日志文件
         File logDir = new File("logs");
         if (!logDir.exists()) {
-            boolean success = logDir.mkdir();
+            logDir.mkdir();
         }
 
         File logFile = new File(LOG_FILE);
@@ -76,7 +79,7 @@ public class TrainingExecutor {
     @Async("trainingTaskExecutor")
     public CompletableFuture<Double> executeTraining(String taskId, int episodes) {
         LOG.info(">>> [TrainingExecutor] 启动训练任务: {}, 线程: {}", taskId, Thread.currentThread().getName());
-        updateStatus(taskId, "RUNNING");
+        updateStatus(taskId, STATUS_RUNNING);
         AtomicReference<Double> finalRewardRef = new AtomicReference<>(0.0);
         
         try {
@@ -133,7 +136,7 @@ public class TrainingExecutor {
                     
                     TrainingTask updateTask = taskMapper.selectById(taskId);
                     if (updateTask != null) {
-                        updateTask.setStatus("COMPLETED");
+                        updateTask.setStatus(STATUS_COMPLETED);
                         updateTask.setFinalReward(finalRewardRef.get());
                         updateTask.setCompletedAt(LocalDateTime.now());
                         updateTask(updateTask);
@@ -141,19 +144,19 @@ public class TrainingExecutor {
                 } else {
                     LOG.error(">>> [TrainingExecutor] 进程异常退出, ExitCode: {}", exitCode);
                     writeToSharedLog(taskId, ">>> 任务失败，退出码: " + exitCode);
-                    updateStatus(taskId, "FAILED");
+                    updateStatus(taskId, STATUS_FAILED);
                 }
             } else {
                 // 超时强制杀灭
                 LOG.warn(">>> [TrainingExecutor] 任务执行超时（{} 小时），正在强制终止: {}", PROCESS_TIMEOUT_HOURS, taskId);
                 process.destroyForcibly();
                 writeToSharedLog(taskId, ">>> [Timeout] 任务因执行超过 " + PROCESS_TIMEOUT_HOURS + " 小时被系统强制终止");
-                updateStatus(taskId, "FAILED");
+                updateStatus(taskId, STATUS_FAILED);
             }
         } catch (Exception e) {
             LOG.error(">>> [TrainingExecutor] 任务运行异常: {}", taskId, e);
             writeToSharedLog(taskId, ">>> [Error] 系统异常: " + e.getMessage());
-            updateStatus(taskId, "FAILED");
+            updateStatus(taskId, STATUS_FAILED);
         }
 
         return CompletableFuture.completedFuture(finalRewardRef.get());
