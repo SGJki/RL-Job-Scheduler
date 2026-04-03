@@ -4,6 +4,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.sgj.rljobscheduler.common.netty.*;
 import org.sgj.rljobscheduler.common.proto.*;
+import org.sgj.rljobscheduler.worker.redis.RedisLeaseManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,9 +26,14 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     private volatile String currentTaskId = "";
     private volatile String lastTaskId = "";
     private volatile int currentAttempt = 0;
+    private RedisLeaseManager leaseManager;
 
     public WorkerHandler(String workerId) {
         this.workerId = workerId;
+    }
+
+    public void setLeaseManager(RedisLeaseManager leaseManager) {
+        this.leaseManager = leaseManager;
     }
 
     public String getCurrentTaskId() {
@@ -59,13 +65,18 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
         this.currentTaskId = taskId;
         this.currentAttempt = req.getAttempt();
 
+        // 立即持久化任务所有权到 Redis（在启动 Python 线程之前）
+        if (leaseManager != null) {
+            leaseManager.persistTaskStart(taskId);
+        }
+
         // 1. 立即返回响应 (确认收到)
         ExecuteTaskResponse resp = ExecuteTaskResponse.newBuilder()
                 .setTaskId(taskId)
                 .setAccepted(true)
                 .setMessage("Task received by worker " + workerId)
                 .build();
-        
+
         NettyMessage nettyResp = new NettyMessage();
         nettyResp.setHeader(new MessageHeader(0, MessageType.EXECUTE_TASK_RESPONSE.getCode()));
         nettyResp.setBody(resp);
@@ -153,6 +164,10 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     }
 
     private void reportStatus(ChannelHandlerContext ctx, String taskId, String status, String errorMsg) {
+        // 立即清除 Redis 中的任务所有权
+        if (leaseManager != null) {
+            leaseManager.clearTask(taskId);
+        }
         int attempt = taskId != null && taskId.equals(this.currentTaskId) ? this.currentAttempt : 0;
         TaskStatusReport report = TaskStatusReport.newBuilder()
                 .setTaskId(taskId)
@@ -160,7 +175,7 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
                 .setErrorMessage(errorMsg != null ? errorMsg : "")
                 .setAttempt(attempt)
                 .build();
-        
+
         NettyMessage msg = new NettyMessage();
         msg.setHeader(new MessageHeader(0, MessageType.TASK_STATUS_REPORT.getCode()));
         msg.setBody(report);

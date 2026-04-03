@@ -24,16 +24,23 @@ public class WorkerAgent {
 
     private static final Logger LOG = LoggerFactory.getLogger(WorkerAgent.class);
 
+    private static final long INITIAL_RECONNECT_DELAY_SECONDS = 1;
+    private static final long MAX_RECONNECT_DELAY_SECONDS = 60;
+    private static final double BACKOFF_MULTIPLIER = 2.0;
+    private static final double JITTER_FACTOR = 0.25;
+
     private final String masterHost;
     private final int masterPort;
     private final String workerId;
-    
+
     private EventLoopGroup group;
     private Channel channel;
     private WorkerHandler workerHandler;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private volatile boolean scheduledStarted = false;
     private RedisLeaseManager leaseManager;
+    private volatile long currentReconnectDelay = INITIAL_RECONNECT_DELAY_SECONDS;
+    private volatile boolean isReconnecting = false;
 
     public WorkerAgent(String host, int port, String workerId) {
         this.masterHost = host;
@@ -45,6 +52,7 @@ public class WorkerAgent {
         group = new NioEventLoopGroup();
         workerHandler = new WorkerHandler(workerId);
         leaseManager = new RedisLeaseManager(workerId);
+        workerHandler.setLeaseManager(leaseManager);
         try {
             Bootstrap b = new Bootstrap();
             b.group(group)
@@ -68,19 +76,83 @@ public class WorkerAgent {
     }
 
     private void connect(Bootstrap b) {
+        if (isReconnecting) {
+            return;
+        }
+        isReconnecting = true;
+
+        // 用数组包装避免 lambda 捕获非 final 变量
+        final Channel[] pendingChannel = new Channel[1];
+
         b.connect(masterHost, masterPort).addListener((ChannelFutureListener) future -> {
-            if (future.isSuccess()) {
-                channel = future.channel();
-                LOG.info(">>> 成功连接到 Master!");
-                channel.closeFuture().addListener((ChannelFutureListener) closeFuture -> {
-                    LOG.warn(">>> 与 Master 连接断开，5秒后重连...");
-                    closeFuture.channel().eventLoop().schedule(() -> connect(b), 5, TimeUnit.SECONDS);
-                });
-            } else {
-                LOG.warn(">>> 连接失败，5秒后重试...");
-                future.channel().eventLoop().schedule(() -> connect(b), 5, TimeUnit.SECONDS);
+            if (!future.isSuccess()) {
+                LOG.warn(">>> TCP 连接失败，{}秒后重试...", currentReconnectDelay);
+                scheduleReconnect(b, 0);
+                return;
             }
+
+            // TCP 三次握手成功，但应用层可能尚未就绪
+            // 先持有 channel 引用，等待一小段时间确认连接真正可用
+            pendingChannel[0] = future.channel();
+            LOG.info(">>> TCP 握手成功，等待应用层就绪...");
+
+            // 等待 1 秒让 Master Spring/Netty 完全初始化
+            pendingChannel[0].eventLoop().schedule(() -> {
+                if (!pendingChannel[0].isActive()) {
+                    // 连接在稳定期内失效，立即重连（不等待指数退避）
+                    LOG.warn(">>> 连接不稳定（1秒内失效），立即重连...");
+                    pendingChannel[0].close();
+                    scheduleReconnect(b, 0);
+                    return;
+                }
+
+                // 连接稳定，isSuccess = true 的连接现在真正可用
+                channel = pendingChannel[0];
+                currentReconnectDelay = INITIAL_RECONNECT_DELAY_SECONDS;
+                isReconnecting = false;
+                LOG.info(">>> 成功连接到 Master（连接已稳定）!");
+
+                // 只注册一次 closeFuture，避免重复触发
+                channel.closeFuture().addListener((ChannelFutureListener) closeFuture -> {
+                    if (isReconnecting) {
+                        return; // 防止 closeFuture 和 scheduleReconnect 双重触发
+                    }
+                    LOG.warn(">>> 与 Master 连接断开，{}秒后重连...", currentReconnectDelay);
+                    scheduleReconnect(b, 0);
+                });
+            }, 1, TimeUnit.SECONDS);
         });
+    }
+
+    private void scheduleReconnect(Bootstrap b, int delayMultiplier) {
+        // delayMultiplier: 0 = 立即（上次已达 delay），>0 = 使用当前 delay
+        long delayWithJitter = calculateDelayWithJitter(
+                delayMultiplier == 0 ? currentReconnectDelay
+                        : (long) (currentReconnectDelay * delayMultiplier)
+        );
+        currentReconnectDelay = Math.min(
+                (long) (currentReconnectDelay * BACKOFF_MULTIPLIER),
+                MAX_RECONNECT_DELAY_SECONDS
+        );
+
+        if (channel != null && !channel.eventLoop().isShuttingDown()) {
+            channel.eventLoop().schedule(() -> {
+                isReconnecting = false;
+                connect(b);
+            }, delayWithJitter, TimeUnit.SECONDS);
+        } else {
+            // channel 已不可用，用 scheduler 的 EventExecutor
+            scheduler.schedule(() -> {
+                isReconnecting = false;
+                connect(b);
+            }, delayWithJitter, TimeUnit.SECONDS);
+        }
+    }
+
+    private long calculateDelayWithJitter(long delay) {
+        long jitterRange = (long) (delay * JITTER_FACTOR);
+        long jitter = (long) (Math.random() * jitterRange * 2 - jitterRange);
+        return Math.max(1, delay + jitter);
     }
 
     private void startSchedulers() {
