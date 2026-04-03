@@ -1,289 +1,479 @@
-this is a web Service for RL training manager 
- 永远不要带着“未提交的修改”切换分支。
-
-
-### 第一步：在当前分支 (dev) “结账”
-在你准备离开 dev 分支之前，必须处理掉手头的改动。
-
-- 做法 A（正式提交） ： git add . -> git commit -m "完成某某功能" 。这是最推荐的，因为你的进度被永久记录了。
-- 做法 B（临时存入“储物柜”） ：如果你改了一半不想提交，执行 git stash 。这会把你的改动暂时藏起来，让工作区瞬间变干净。
-### 第二步：切换到目标分支 (master)
-现在工作区干净了，切换分支将非常顺滑：
-
-- 执行： git checkout master
-### 第三步：同步远程状态
-在合并之前，先确保你本地的 master 是最新的：
-
-- 执行： git pull origin master
-### 第四步：执行合并
-将 dev 的成果拿过来：
-
-- 执行： git merge dev
-- 此时可能发生两种情况 ：
-  1. Fast-forward ：没有任何冲突，合并瞬间完成。
-  2. Conflict（冲突） ：如果两个分支改了同一行，Git 会停下来。你需要手动打开报错的文件，选择保留哪个版本，然后再次 add 和 commit 。
-### 第五步：推送到远程
-- 执行： git push origin master
-### 💡 特殊场景：如果你已经在 master 分支上改了东西怎么办？
-就像你刚才遇到的情况，如果你在 master 上已经写了代码但没提交：
-
-1. 方案 A（推荐） ：直接在 master 上 commit 掉这些改动，然后再 merge dev 。
-2. 方案 B ：执行 git stash 藏起来 -> git merge dev -> git stash pop 把藏起来的代码再拿出来贴上去。
-
-
-这个项目不仅仅是用来练手的，它的目标是 能够写在简历上，证明你懂“后端架构”和“AI工程化” 。
-1. 核心业务痛点 (你的故事线)
-   你发现在实验室里，大家跑 RL 实验非常混乱：
-
-- 手动 SSH 到服务器跑脚本，没人记录参数。
-- 多个人抢 GPU，经常把别人的进程 kill 掉。
-- 跑完的结果（TensorBoard logs、模型 checkpoints）散落在各处，很难对比。
-  解决方案 ：开发一个 Web 平台，统一管理训练任务、调度计算资源、可视化结果。
-
-# RL Training Platform (强化学习训练平台)
+# RL-Job-Scheduler (强化学习训练调度平台)
 
 > **Current Status**: Phase 10 (Gateway + Nacos + 流量治理 + 可观测性) 已完成第一轮落地与收尾硬化
 
-这是一个基于 Spring Boot 构建的后端系统，旨在管理和调度强化学习（RL）训练任务。目前支持异步任务提交、MySQL 持久化存储、以及基于 Web 的可视化交互界面。
+这是一个基于 Spring Boot 构建的分布式后端系统，旨在管理和调度强化学习（RL）训练任务。采用 **Master-Worker** 架构，支持异步任务提交、分布式计算调度、实时日志监控。
 
-## 🏗️ 架构划分 (Architecture)
-本项目采用 **Master-Worker** 分布式架构，将 Web 管理与计算压力解耦。
+---
 
-### 1. 目录结构
+## 目录
+
+- [项目背景](#项目背景)
+- [系统架构](#系统架构)
+- [技术栈](#技术栈)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [可观测性](#可观测性)
+- [灰度发布](#灰度发布)
+- [开发路线图](#开发路线图)
+- [API文档](#api文档)
+- [Git操作指南](#git操作指南)
+
+---
+
+## 项目背景
+
+### 核心业务痛点
+
+在实验室环境中，RL实验管理常常面临以下问题：
+
+| 问题 | 描述 |
+|------|------|
+| 🔴 参数无记录 | 手动SSH到服务器跑脚本，没人记录参数 |
+| 🔴 资源冲突 | 多人抢GPU，经常误杀别人进程 |
+| 🔴 结果分散 | TensorBoard logs、模型checkpoints散落各处，难以对比 |
+
+### 解决方案
+
+开发一个 **Web平台**，统一管理训练任务、调度计算资源、可视化结果。
+
+**项目价值**：这是一个可以写在简历上的项目，证明你懂 **"后端架构"** 和 **"AI工程化"**。
+
+---
+
+## 系统架构
+
+### 整体架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              用户浏览器                                       │
+│                    (Thymeleaf + Bootstrap + WebSocket)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          API Gateway (8081)                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │ JWT 鉴权    │  │ 限流控制    │  │ 路由转发    │  │ TraceId注入 │        │
+│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘        │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                          ┌─────────┴─────────┐
+                          │   Nacos 服务发现   │
+                          └─────────┬─────────┘
+                                    │
+              ┌─────────────────────┼─────────────────────┐
+              │                     │                     │
+              ▼                     ▼                     ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│  Master (8082)   │  │ Master Canary    │  │   Master N...    │
+│  ┌────────────┐  │  │   (8083)         │  │                  │
+│  │ Web MVC    │  │  │  (灰度实例)      │  │                  │
+│  │ WebSocket  │  │  └──────────────────┘  └──────────────────┘
+│  │ Scheduler  │  │
+│  │ LogManager │  │
+│  └────────────┘  │
+└──────────────────┘
+        │
+        │ Netty RPC (9000)
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Worker 集群 (计算节点)                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │ Worker-1     │  │ Worker-2     │  │ Worker-3     │  │ Worker-N     │   │
+│  │ ┌──────────┐ │  │ ┌──────────┐ │  │ ┌──────────┐ │  │ ┌──────────┐ │   │
+│  │ │Netty连接 │ │  │ │Netty连接 │ │  │ │Netty连接 │ │  │ │Netty连接 │ │   │
+│  │ │心跳续期  │ │  │ │心跳续期  │ │  │ │心跳续期  │ │  │ │心跳续期  │ │   │
+│  │ │Python执行│ │  │ │Python执行│ │  │ │Python执行│ │  │ │Python执行│ │   │
+│  │ └──────────┘ │  │ └──────────┘ │  │ └──────────┘ │  │ └──────────┘ │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          基础设施层                                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+│  │ MySQL 8.0    │  │ Redis        │  │ Nacos Server │  │ Python Env   │   │
+│  │ (持久化)     │  │ (调度/限流)  │  │ (服务发现)   │  │ (RL算法)     │   │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Master-Worker 通讯流程
+
+```
+┌─────────┐                                      ┌─────────┐
+│ Master  │                                      │ Worker  │
+└────┬────┘                                      └────┬────┘
+     │                                                 │
+     │  ◄────── Heartbeat Request (10s interval) ────►│
+     │                                                 │
+     │  ─────── ExecuteTaskRequest (Protobuf) ──────► │
+     │                                                 │
+     │  ◄────── LogData (实时日志流) ────────────────►│
+     │                                                 │
+     │  ◄────── TaskFinished (结果回传) ─────────────►│
+     │                                                 │
+```
+
+### Worker 状态机
+
+```
+        ┌─────────┐
+        │  IDLE   │ ◄── 心跳存在，无任务
+        └────┬────┘
+             │ 收到任务
+             ▼
+        ┌─────────┐
+        │ RUNNING │ ◄── 心跳+任务Key均存在
+        └────┬────┘
+             │ 任务完成/超时
+             ▼
+        ┌─────────┐
+        │ PENDING │ ◄── 心跳丢失，任务Key存在 (等待恢复)
+        └────┬────┘
+             │ 超时未恢复
+             ▼
+        ┌─────────┐
+        │  DOWN   │ ◄── 心跳+任务Key均丢失
+        └─────────┘
+```
+
+### 目录结构
+
 ```text
 src/main/java/org/sgj/rljobscheduler/
-├── common/             # [公共模块] 
+├── common/             # [公共模块]
 │   ├── proto/          # Protobuf 协议定义及生成的 Java 类
 │   └── netty/          # 自定义 RPC 协议头、编解码器
 ├── master/             # [调度大脑] (Spring Boot 应用)
 │   ├── config/         # 异步线程池、安全、WebSocket、Redis 配置
 │   ├── controller/     # RESTful API、监控接口、Thymeleaf 路由
 │   ├── service/        # 任务分发逻辑、LogManager (异步日志处理器)
-│   └── mapper/         # 数据库访问层
+│   ├── mapper/         # 数据库访问层
+│   ├── entity/         # 数据库实体
+│   └── dto/            # 数据传输对象
 └── worker/             # [计算节点] (轻量级 Java Agent)
-    ├── agent/          # 心跳上报、RPC 连接管理
-    └── process/        # Python 进程执行器、实时日志拦截
+    ├── netty/          # RPC 连接管理、消息处理
+    └── redis/          # 心跳续期、租约管理
+
+gateway/                 # [API网关] (独立 Maven 工程)
+scripts/                 # Python 训练脚本
+└── train.py            # RL 训练模拟脚本
 ```
 
-### 2. 核心设计
-*   **通讯协议**: 基于 Netty + Protobuf 的自定义二进制协议。
-*   **状态机**: 实现 `IDLE` / `PENDING` / `RUNNING` / `DOWN` 四种状态流转，支持网络波动容错。
-*   **性能优化**: Master 端引入 `LogManager` 异步队列，实现日志持久化与 WebSocket 旁路推送的解耦。
+### 核心设计
+
+| 设计点 | 实现方式 |
+|--------|----------|
+| **通讯协议** | Netty + Protobuf 自定义二进制协议 |
+| **状态机** | IDLE / PENDING / RUNNING / DOWN 四状态流转 |
+| **抢占机制** | Redis Lua 脚本原子性抢占 Worker |
+| **性能优化** | LogManager 异步队列解耦 Netty EventLoop |
+| **容错机制** | TaskIDKey 2分钟TTL + Worker续期 |
 
 ---
 
-## 📅 路线图 (Roadmap)
+## 技术栈
 
-- [x] **Phase 1: 基础骨架 (RESTful API)**
-    - 实现 Spring Boot Web 服务
-    - 定义 Controller -> Service -> DTO 数据流转
-    - 接口: `POST /api/train`, `GET /api/tasks`
+### 后端
 
-- [x] **Phase 2: 异步任务调度 (Async Processing)**
-    - 引入 `@Async` 和线程池
-    - 实现非阻塞任务提交（立即返回 Task ID）
-    - 后台线程模拟耗时训练过程
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Java | 17 | 运行时 |
+| Spring Boot | 4.0.3 | Web框架 |
+| Spring Security | 6.x | 安全框架 |
+| Spring Cloud Gateway | 2025.1.0 | API网关 |
+| Nacos | 2025.1.0.0 | 服务发现 |
+| MyBatis-Plus | 3.5.15 | ORM框架 |
+| Netty | 4.1.101 | RPC通讯 |
+| Protobuf | 3.25.1 | 序列化 |
 
-- [x] **Phase 3: 数据持久化 (Persistence & ORM)**
-    - 数据库迁移: H2 (内存) -> **MySQL 8.0**
-    - ORM 框架迁移: JPA -> **MyBatis-Plus**
-    - 数据库初始化: `schema.sql` 自动建表
+### 前端
 
-- [x] **Phase 4: 可视化交互 (Frontend Interaction)**
-    - 模板引擎: **Thymeleaf**
-    - UI 框架: **Bootstrap 5**
-    - 交互增强: **jQuery AJAX** (无刷新提交/翻页)
-    - 功能:
-        - 任务提交表单 (AJAX + Modal 弹窗)
-        - 任务列表自动刷新 (Auto-refresh)
-        - 分页查询 (Pagination)
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Thymeleaf | 3.x | 模板引擎 |
+| Bootstrap | 5.x | UI框架 |
+| jQuery | 3.6 | 交互增强 |
+| SockJS + Stomp.js | - | WebSocket |
 
-- [x] **Phase 5: 真实算法集成 (Real RL Integration)**
-    - Java `ProcessBuilder` 调用 Python 脚本
-    - 实时日志流处理 (stdout/stderr 合并)
-    - 共享日志文件 (`logs/training.log`)
-    - 结果解析与数据库回写
+### 基础设施
 
-- [x] **Phase 6: 统一认证与授权 (Security)**
-    - 框架: **Spring Security**
-    - 认证方式: **JWT (JSON Web Token)**
-    - 权限模型: **RBAC** (用户隔离)
+| 技术 | 用途 |
+|------|------|
+| MySQL 8.0 | 数据持久化 |
+| Redis | 调度/限流/心跳 |
+| Nacos Server | 服务注册发现 |
 
-- [x] **Phase 7: 实时交互优化 (Real-time Interaction)**
-    - 协议: **WebSocket (STOMP)**
-    - 后端推送: `SimpMessagingTemplate`
-    - 前端同步: `SockJS` + `Stomp.js` (无刷新更新状态)
+---
 
-- [ ] **Phase 8: 实时日志监控 (Log Streaming)**
-    - 文件监听: `Apache Commons IO (Tailer)`
-    - 推送通道: WebSocket (复用)
-    - 前端展示: 自动滚动日志控制台
+## 快速开始
 
-- **Backend**: Java 17, Spring Boot 4.0.3
-- **Database**: MySQL 8.0.33
-- **ORM**: MyBatis-Plus 3.5.15
-- **Frontend**: Thymeleaf, Bootstrap 5, jQuery 3.6
-- **Integration**: Python 3 (ProcessBuilder)
-- **Build Tool**: Maven
+### 1. 环境准备
 
-## 📦 快速开始 (Quick Start)
+| 依赖 | 版本要求 | 说明 |
+|------|----------|------|
+| JDK | 17+ | 必需 |
+| Maven | 3.6+ | 必需 |
+| MySQL | 8.0+ | 创建数据库 `testdb` |
+| Redis | 任意版本 | 默认 `localhost:6379` |
+| Nacos | 2.x | 建议端口 `8848` |
 
-### 1) 环境准备
-- JDK 17+
-- Maven 3.6+
-- MySQL 8+（创建数据库 `testdb`）
-- Redis（用于调度/限流）
-- Nacos（服务注册发现）
-- uv（用于本地 Python 依赖管理，可选）
+### 2. 启动依赖服务
 
-同步 scripts 里的 Python 环境（可选）：
 ```bash
+# 1. 启动 MySQL
+net start mysql
+
+# 2. 启动 Nacos (单机模式)
+startup.cmd -m standalone
+
+# 3. 启动 Redis
+redis-server
+```
+
+### 3. 启动应用服务
+
+```bash
+# 4. 启动 Master (调度中心)
+./mvnw spring-boot:run
+
+# 5. 启动 Gateway (API网关)
+./mvnw -f gateway/pom.xml spring-boot:run
+
+# 6. 启动 Worker (可选，分布式调度时需要)
+java -cp target/classes:target/dependency/* org.sgj.rljobscheduler.worker.WorkerAgent
+```
+
+### 4. 访问应用
+
+- **网关入口**: `http://localhost:8081/`
+- **Nacos控制台**: `http://127.0.0.1:8848/nacos`
+- **Master直连**: `http://localhost:8082/` (仅调试用)
+
+### 5. Python环境 (可选)
+
+```bash
+# 同步 Python 依赖
 uv sync
 ```
 
-### 2) 启动依赖（本机）
-- MySQL：确保 `testdb` 已创建，且账号密码与配置一致
-- Redis：默认 `localhost:6379`
-- Nacos：建议使用 `8848` 作为 Server 端口（Console/UI 可能映射到 `8080`，两者用途不同）
-  - Nacos Console 常见地址：`http://127.0.0.1:8848/nacos`
+---
 
-### 3) 启动服务（推荐顺序）
-1. 启动 Master
-```bash
-./mvnw spring-boot:run
-```
+## 配置说明
 
-2. 启动 Gateway（独立 Maven 工程）
-```bash
-./mvnw -f gateway/pom.xml spring-boot:run
-```
+### 端口配置
 
-3. 访问入口（统一入口）
-- `http://localhost:8081/`
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `GATEWAY_PORT` | 8081 | 网关端口 |
+| `MASTER_PORT` | 8082 | Master端口 |
+| `rpc.server.port` | 9000 | Netty RPC端口 |
 
-### 4) Worker（可选）
-Worker 是独立 Java Agent（用于 Phase 9 的分布式执行），只在你需要分布式调度时启动。
+### Nacos配置
+
+| 配置项 | 默认值 |
+|--------|--------|
+| `NACOS_ADDR` | `127.0.0.1:8848` |
+| `NACOS_USERNAME` | `nacos` |
+| `NACOS_PASSWORD` | `599500` |
+
+### JWT配置
+
+| 配置项 | 说明 |
+|--------|------|
+| `JWT_SECRET` | JWT密钥（生产环境必须设置） |
+
+### 网关安全配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `GATEWAY_TRUST_HEADERS` | true | 接受网关签名Header |
+| `GATEWAY_REQUIRE` | true | 强制要求签名Header |
+| `GATEWAY_SHARED_SECRET` | - | 网关与Master共享密钥 |
+| `GATEWAY_MAX_SKEW_SECONDS` | 300 | 时间戳允许误差 |
+
+### 流量治理配置
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `JWT_ENFORCE` | true | JWT强制鉴权 |
+| `RATE_LIMIT_ENABLED` | true | 限流开关 |
+| `RATE_LIMIT_WINDOW_SECONDS` | 10 | 限流窗口(秒) |
+| `RATE_LIMIT_MAX_REQUESTS` | 3 | 窗口内最大请求数 |
+| `FALLBACK_ENABLED` | true | 降级开关 |
+| `FALLBACK_TIMEOUT_MS` | 5000 | 降级超时(ms) |
+
+### 配置文件位置
+
+- Master: `src/main/resources/application.yaml`
+- Gateway: `gateway/src/main/resources/application.yaml`
 
 ---
 
-## ⚙️ 配置整理 (Config Cheatsheet)
+## 可观测性
 
-### 入口与端口
-- Gateway：`GATEWAY_PORT`（默认 8081）
-- Master：`MASTER_PORT`（默认 8082）
-- Netty RPC：`rpc.server.port`（默认 9000）
+### TraceId 链路追踪
 
-### Nacos（Gateway/Master 通用）
-- `NACOS_ADDR`（默认 `127.0.0.1:8848`）
-- `NACOS_USERNAME`（默认 `nacos`）
-- `NACOS_PASSWORD`（默认 `599500`）
-
-### JWT（Gateway/Master 通用）
-- `JWT_SECRET`（建议线上显式设置，避免默认值）
-
-### 网关信任边界（Master）
-- `GATEWAY_TRUST_HEADERS`：是否接受来自网关的签名 Header（默认 `true`）
-- `GATEWAY_REQUIRE`：是否强制要求“受保护路径”必须带网关签名头（默认 `true`）
-  - 生产建议保持 `true`，并确保 Master 端口不对公网暴露
-  - 本地直连调试时可临时设置 `GATEWAY_REQUIRE=false`
-- `GATEWAY_SHARED_SECRET`：网关与 Master 共享密钥（两边必须一致）
-- `GATEWAY_MAX_SKEW_SECONDS`：签名时间戳允许误差（默认 300）
-
-### 流量治理（Gateway）
-- JWT 强制鉴权：`JWT_ENFORCE`（默认 `true`）
-- 限流开关：`RATE_LIMIT_ENABLED`（默认 `true`）
-- 限流窗口：`RATE_LIMIT_WINDOW_SECONDS`（默认 10）
-- 限流次数：`RATE_LIMIT_MAX_REQUESTS`（默认 3）
-- 降级开关：`FALLBACK_ENABLED`（默认 `true`）
-- 降级超时：`FALLBACK_TIMEOUT_MS`（默认 5000）
-
-配置文件参考：
-- Master：[application.yaml](file:///c:/Users/13253/dataDisk/java_code/Welcome/RL-Job-Scheduler/src/main/resources/application.yaml)
-- Gateway：[application.yaml](file:///c:/Users/13253/dataDisk/java_code/Welcome/RL-Job-Scheduler/gateway/src/main/resources/application.yaml)
-
----
-
-## 🔭 可观测性硬化 (Observability)
-
-### TraceId（跨 Gateway/Master）
-- Header：`X-Trace-Id`
-- 网关会自动生成并在请求/响应上携带；Master 会回写响应头并写入日志 MDC
-- Master 日志文件：`logs/app.log`
-  - 每行中 `-[<traceId>]` 就是 TraceId（未处在 HTTP 请求链路时会显示为空 `[]`）
-
-### 任务日志与 TraceId 关联
-- 新任务的日志文件第一行写入 `TRACE_ID:<traceId>`
-  - Master：`logs/<taskId>.log`
-  - Worker：`server_log/<taskId>.log`
-用途：从任务日志可反查该任务对应的 HTTP TraceId，再去 `logs/app.log` 精准定位入口与链路问题。
-
----
-
-## 🧪 灰度转发 (Canary Routing)
-
-最小灰度规则：请求头带 `X-Canary: true` 的流量转发到 `rl-master-canary`（HTTP + WebSocket）。
-增强规则（可选）：
-- 按用户白名单：`security.canary.user-ids`（匹配 `X-User-Id`）
-- 按百分比分流：`security.canary.percent`（0-100，基于 `X-User-Id` / `X-Trace-Id` 做稳定 hash）
-
-示例：
-```bash
-curl -i -H "X-Canary: true" http://localhost:8081/
+```
+请求 ──► Gateway生成X-Trace-Id ──► Master写入MDC ──► 日志文件
 ```
 
-要让灰度生效，需要额外启动一个 Master 实例并注册为 `rl-master-canary`：
-- 方式：覆盖 `spring.application.name` 与端口，例如（PowerShell）：
+- Header: `X-Trace-Id`
+- 日志文件: `logs/app.log`
+- 日志格式: `yyyy-MM-dd HH:mm:ss.SSS [thread] level logger - [traceId] message`
+
+### 任务日志关联
+
+```
+logs/<taskId>.log    第一行: TRACE_ID:<traceId>
+```
+
+用途：从任务日志反查HTTP TraceId，定位链路问题。
+
+### Actuator端点
+
+| 端点 | 说明 |
+|------|------|
+| `/gateway-actuator/health` | 网关健康状态 |
+| `/gateway-actuator/gateway/routes` | 路由配置 |
+| `/api/monitor/health` | 线程池状态 |
+
+---
+
+## 灰度发布
+
+### 触发灰度
+
 ```bash
+# 方式1: 请求头
+curl -H "X-Canary: true" http://localhost:8081/api/tasks
+
+# 方式2: 用户白名单 (配置 security.canary.user-ids)
+# 方式3: 百分比分流 (配置 security.canary.percent)
+```
+
+### 启动灰度实例
+
+```bash
+# PowerShell
 $env:MASTER_PORT=8083
 $env:SPRING_APPLICATION_NAME="rl-master-canary"
 $env:SCHEDULER_QUEUE_ENABLED="true"
 ./mvnw spring-boot:run
 ```
 
-说明：
-- `SCHEDULER_QUEUE_ENABLED=true` 用于开启“调度队列重试”逻辑（Canary 验证用）。当所有 Worker 忙碌导致任务暂时无法下发时，任务会进入队列；待 Worker 空闲/心跳上报或任务完成释放时，会自动从队列取出并继续下发，避免任务被“遗忘”。
+---
+
+## 开发路线图
+
+- [x] **Phase 1**: 基础骨架 (RESTful API)
+- [x] **Phase 2**: 异步任务调度
+- [x] **Phase 3**: 数据持久化 (MySQL + MyBatis-Plus)
+- [x] **Phase 4**: 可视化交互 (Thymeleaf + Bootstrap)
+- [x] **Phase 5**: 真实算法集成 (Python ProcessBuilder)
+- [x] **Phase 6**: 统一认证与授权 (JWT + RBAC)
+- [x] **Phase 7**: 实时交互优化 (WebSocket)
+- [x] **Phase 8**: 实时日志监控 (Tailer + WebSocket)
+- [x] **Phase 9**: 分布式调度 (Netty + Protobuf)
+- [x] **Phase 10**: 微服务网关 (Gateway + Nacos)
 
 ---
 
-## 🩺 Actuator（网关）
-- BasePath：`/gateway-actuator`
-- 暴露端点：`health,info,gateway`
-  - 例：`http://localhost:8081/gateway-actuator/health`
-  - 路由：`http://localhost:8081/gateway-actuator/gateway/routes`
+## API文档
 
+详细的API文档请参考: [docs/API.md](docs/API.md)
 
-## 📂 项目结构
+### 核心接口速览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/auth/login` | 用户登录 |
+| POST | `/api/auth/register` | 用户注册 |
+| POST | `/api/train` | 提交训练任务 |
+| GET | `/api/tasks` | 查询任务列表 |
+| GET | `/api/monitor/health` | 系统健康状态 |
+| GET | `/api/monitor/logs/{taskId}` | 获取任务日志 |
+| WS | `/ws` | WebSocket连接 |
+| Subscribe | `/topic/tasks` | 订阅任务更新 |
+
+---
+
+## Git操作指南
+
+> ⚠️ **重要原则**: 永远不要带着"未提交的修改"切换分支！
+
+### 分支合并流程
+
 ```
-src/main/java/org/example/demo/
-├── config/             # 配置类 (MyBatis-Plus 分页插件)
-├── controller/         # 控制器 (WebController, TrainingController)
-├── dto/                # 数据传输对象 (Request/Result)
-├── entity/             # 数据库实体 (TrainingTask)
-├── mapper/             # MyBatis Mapper 接口
-├── service/            # 业务逻辑 (TrainingService, TrainingExecutor)
-└── DemoApplication.java # 启动类
-
-scripts/
-└── train.py            # Python 训练模拟脚本
+dev分支 ──► master分支
 ```
 
-## 📝 API 文档 (Legacy)
-虽然现在有了 Web 界面，但原来的 REST API 依然可用：
+#### 第一步：在当前分支 (dev) "结账"
 
-- **提交训练任务**
-    - `POST /api/train`
-    - Body: `{ "algorithm": "PPO", "episodes": 1000, "learningRate": 0.001 }`
+在离开 dev 分支之前，处理手头改动：
 
-- **查询所有任务**
-    - `GET /api/tasks`
+**方式A（推荐）**: 正式提交
+```bash
+git add .
+git commit -m "完成某某功能"
+```
 
-## run:
+**方式B**: 临时储藏
+```bash
+git stash                    # 藏起改动
+# ... 切换分支操作 ...
+git stash pop               # 恢复改动
+```
 
-    1. 启动MySQL数据库 net start mysql 
-    2. 启动nacos  startup.cmd -m standalone（建议 8848）
-    3. 启动 redis
-    4. 启动 Master  ./mvnw spring-boot:run
-    5. 启动 Gateway ./mvnw -f gateway/pom.xml spring-boot:run
-    6. 启动前端 npm run dev
-    7. 访问gateway http://localhost:8081
+#### 第二步：切换到目标分支 (master)
 
+```bash
+git checkout master
+```
+
+#### 第三步：同步远程状态
+
+```bash
+git pull origin master
+```
+
+#### 第四步：执行合并
+
+```bash
+git merge dev
+```
+
+可能的情况：
+- **Fast-forward**: 无冲突，合并瞬间完成
+- **Conflict**: 需手动解决冲突，然后 `git add . && git commit`
+
+#### 第五步：推送到远程
+
+```bash
+git push origin master
+```
+
+### 特殊场景：master上已有未提交改动
+
+**方案A（推荐）**: 直接提交后合并
+```bash
+git add .
+git commit -m "临时改动"
+git merge dev
+```
+
+**方案B**: 储藏后合并
+```bash
+git stash
+git merge dev
+git stash pop
+```
+
+---
+
+## 许可证
+
+MIT License
