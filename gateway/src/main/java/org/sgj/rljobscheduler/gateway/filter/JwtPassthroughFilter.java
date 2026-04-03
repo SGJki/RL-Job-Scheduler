@@ -3,6 +3,7 @@ package org.sgj.rljobscheduler.gateway.filter;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import org.sgj.rljobscheduler.common.SignatureUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.cloud.gateway.filter.GlobalFilter;
@@ -17,8 +18,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.net.URI;
 import java.security.Key;
@@ -71,16 +70,7 @@ public class JwtPassthroughFilter implements GlobalFilter, Ordered {
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         String path = exchange.getRequest().getURI().getPath();
-        if (path == null) {
-            return chain.filter(exchange);
-        }
-        for (String prefix : PUBLIC_PREFIXES) {
-            if (path.startsWith(prefix)) {
-                return chain.filter(exchange);
-            }
-        }
-
-        if (!enforce) {
+        if (path == null || isPublicPath(path) || !enforce) {
             return chain.filter(exchange);
         }
 
@@ -89,53 +79,49 @@ public class JwtPassthroughFilter implements GlobalFilter, Ordered {
             return unauthorized(exchange);
         }
 
-        Claims claims;
-        try {
-            claims = Jwts.parserBuilder().setSigningKey(secretKey).build().parseClaimsJws(token).getBody();
-        } catch (Exception e) {
+        Claims claims = parseToken(token);
+        if (claims == null) {
             return unauthorized(exchange);
         }
 
-        String username = claims.getSubject();
-        String role = claims.get("role", String.class);
-        Object userIdObj = claims.get("userId");
-        String userId = userIdObj == null ? "" : String.valueOf(userIdObj);
-
-        String traceId = exchange.getRequest().getHeaders().getFirst("X-Trace-Id");
-        if (traceId == null || traceId.isBlank()) {
-            traceId = "no-trace";
-        }
+        String rawTraceId = exchange.getRequest().getHeaders().getFirst("X-Trace-Id");
+        String traceId = (rawTraceId == null || rawTraceId.isBlank()) ? "no-trace" : rawTraceId;
         String ts = String.valueOf(Instant.now().getEpochSecond());
-        String payload = exchange.getRequest().getMethod() + "\n" + exchange.getRequest().getURI().getPath() + "\n" + traceId + "\n" + ts;
-        String signature = hmacSha256Hex(payload);
 
         ServerHttpRequest mutated = exchange.getRequest()
                 .mutate()
                 .headers(h -> {
+                    String username = claims.getSubject();
+                    String role = claims.get("role", String.class);
+                    Object userIdObj = claims.get("userId");
+                    String userId = userIdObj == null ? "" : String.valueOf(userIdObj);
                     if (username != null) h.set("X-User-Name", username);
                     if (role != null) h.set("X-User-Role", role);
                     if (!userId.isBlank()) h.set("X-User-Id", userId);
                     h.set("X-Gateway-Auth", "jwt-parsed");
                     h.set("X-Gateway-Timestamp", ts);
-                    h.set("X-Gateway-Signature", signature);
+                    String payload = exchange.getRequest().getMethod() + "\n" + exchange.getRequest().getURI().getPath() + "\n" + traceId + "\n" + ts;
+                    h.set("X-Gateway-Signature", SignatureUtils.hmacSha256Hex(gatewaySharedSecretBytes, payload));
                 })
                 .build();
 
         return chain.filter(exchange.mutate().request(mutated).build());
     }
 
-    private String hmacSha256Hex(String payload) {
-        try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(gatewaySharedSecretBytes, "HmacSHA256"));
-            byte[] bytes = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder(bytes.length * 2);
-            for (byte b : bytes) {
-                sb.append(String.format("%02x", b));
+    private boolean isPublicPath(String path) {
+        for (String prefix : PUBLIC_PREFIXES) {
+            if (path.startsWith(prefix)) {
+                return true;
             }
-            return sb.toString();
+        }
+        return false;
+    }
+
+    private Claims parseToken(String token) {
+        try {
+            return Jwts.parserBuilder().setSigningKey(secretKey).build().parseClaimsJws(token).getBody();
         } catch (Exception e) {
-            return "";
+            return null;
         }
     }
 

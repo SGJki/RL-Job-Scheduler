@@ -39,12 +39,12 @@ public class AuthController {
 
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletResponse response) {
-        Cookie cookie = new Cookie("jwt_token", null);
+        Cookie cookie = new Cookie("jwt_token", "");
         cookie.setPath("/");
         cookie.setMaxAge(0); // 立即删除
         response.addCookie(cookie);
         return ResponseEntity.ok("Logout successful");
-        }
+    }
 
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody AuthRequest authRequest) throws Exception {

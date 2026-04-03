@@ -68,5 +68,16 @@ public class JwtUtils {
             return false;
         }
     }
+
+    /**
+     * 验证并解析 Token，失败返回 null
+     */
+    public Claims validateAndParse(String token) {
+        try {
+            return parseToken(token);
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }
 
