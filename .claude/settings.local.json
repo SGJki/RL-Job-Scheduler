@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./mvnw -f gateway/pom.xml compile -q)",
+      "Bash(gh pr:*)",
+      "Bash(./mvnw compile:*)",
+      "Bash(./mvnw test:*)"
+    ]
+  }
+}
