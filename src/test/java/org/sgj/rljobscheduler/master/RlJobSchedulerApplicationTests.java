@@ -11,7 +11,10 @@ import org.springframework.boot.test.context.SpringBootTest;
                 "spring.datasource.username=sa",
                 "spring.datasource.password=",
                 "spring.datasource.driverClassName=org.h2.Driver",
-                "rpc.server.enabled=false"
+                "rpc.server.enabled=false",
+                "scheduler.queue.enabled=false",
+                "scheduler.reconcile.enabled=false",
+                "scheduler.recover.enabled=false"
         }
 )
 class RlJobSchedulerApplicationTests {

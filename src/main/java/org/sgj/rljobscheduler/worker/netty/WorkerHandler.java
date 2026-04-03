@@ -23,6 +23,8 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     private static final Logger LOG = LoggerFactory.getLogger(WorkerHandler.class);
     private final String workerId;
     private volatile String currentTaskId = "";
+    private volatile String lastTaskId = "";
+    private volatile int currentAttempt = 0;
 
     public WorkerHandler(String workerId) {
         this.workerId = workerId;
@@ -30,6 +32,14 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
 
     public String getCurrentTaskId() {
         return currentTaskId;
+    }
+
+    public String getLastTaskId() {
+        return lastTaskId;
+    }
+
+    public int getCurrentAttempt() {
+        return currentAttempt;
     }
 
     @Override
@@ -45,7 +55,9 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     private void handleExecuteTask(ChannelHandlerContext ctx, ExecuteTaskRequest req) {
         String taskId = req.getTaskId();
         LOG.info(">>> 收到训练任务: taskId={}, algo={}", taskId, req.getAlgorithm());
+        this.lastTaskId = taskId;
         this.currentTaskId = taskId;
+        this.currentAttempt = req.getAttempt();
 
         // 1. 立即返回响应 (确认收到)
         ExecuteTaskResponse resp = ExecuteTaskResponse.newBuilder()
@@ -114,6 +126,7 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
             
             if (taskId.equals(this.currentTaskId)) {
                 this.currentTaskId = "";
+                this.currentAttempt = 0;
             }
 
         } catch (Exception e) {
@@ -121,6 +134,7 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
             reportStatus(ctx, taskId, "FAILED", e.getMessage());
             if (taskId.equals(this.currentTaskId)) {
                 this.currentTaskId = "";
+                this.currentAttempt = 0;
             }
         }
     }
@@ -139,10 +153,12 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     }
 
     private void reportStatus(ChannelHandlerContext ctx, String taskId, String status, String errorMsg) {
+        int attempt = taskId != null && taskId.equals(this.currentTaskId) ? this.currentAttempt : 0;
         TaskStatusReport report = TaskStatusReport.newBuilder()
                 .setTaskId(taskId)
                 .setStatus(status)
                 .setErrorMessage(errorMsg != null ? errorMsg : "")
+                .setAttempt(attempt)
                 .build();
         
         NettyMessage msg = new NettyMessage();

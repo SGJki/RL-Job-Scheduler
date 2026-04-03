@@ -23,6 +23,7 @@ message ExecuteTaskRequest {
     int32 episodes = 3;
     double learningRate = 4;
     string traceId = 5;
+    int32 attempt = 6;
 }
 
 // 3. 任务下发响应 (Worker -> Master)
@@ -47,4 +48,5 @@ message TaskStatusReport {
     string status = 2; // RUNNING, COMPLETED, FAILED
     double finalReward = 3;
     string errorMessage = 4;
+    int32 attempt = 5;
 }

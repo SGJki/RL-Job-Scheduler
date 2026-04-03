@@ -236,8 +236,12 @@ curl -i -H "X-Canary: true" http://localhost:8081/
 ```bash
 $env:MASTER_PORT=8083
 $env:SPRING_APPLICATION_NAME="rl-master-canary"
+$env:SCHEDULER_QUEUE_ENABLED="true"
 ./mvnw spring-boot:run
 ```
+
+说明：
+- `SCHEDULER_QUEUE_ENABLED=true` 用于开启“调度队列重试”逻辑（Canary 验证用）。当所有 Worker 忙碌导致任务暂时无法下发时，任务会进入队列；待 Worker 空闲/心跳上报或任务完成释放时，会自动从队列取出并继续下发，避免任务被“遗忘”。
 
 ---
 

@@ -9,6 +9,7 @@ import org.sgj.rljobscheduler.common.proto.*;
 import io.netty.util.AttributeKey;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
+import org.sgj.rljobscheduler.master.service.SchedulerService;
 import org.sgj.rljobscheduler.master.service.LogManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,6 +45,9 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
 
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
+
+    @Autowired
+    private SchedulerService schedulerService;
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
@@ -99,6 +103,9 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
         if (currentTaskId != null && !currentTaskId.isEmpty()) {
             String taskKey = "worker:" + workerId + ":task";
             redisTemplate.expire(taskKey, 120, TimeUnit.SECONDS);
+            schedulerService.renewTaskOwnerTtl(currentTaskId);
+        } else {
+            schedulerService.tryDispatchQueuedTaskToWorker(workerId);
         }
         
         // 记录 Worker 元数据 (可选)
@@ -119,26 +126,33 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
     private void handleStatusReport(ChannelHandlerContext ctx, TaskStatusReport report) {
         String taskId = report.getTaskId();
         String status = report.getStatus();
-        LOG.info(">>> 收到任务状态报告: taskId={}, status={}", taskId, status);
+        int reportAttempt = report.getAttempt();
+        int currentAttempt = schedulerService.getCurrentAttempt(taskId);
+        boolean attemptMatched = reportAttempt <= 0 || currentAttempt <= 0 || reportAttempt == currentAttempt;
+        LOG.info(">>> 收到任务状态报告: taskId={}, status={}, attempt={}, currentAttempt={}", taskId, status, reportAttempt, currentAttempt);
         
         // 更新数据库
-        TrainingTask task = taskMapper.selectById(taskId);
-        if (task != null) {
-            task.setStatus(status);
-            if ("COMPLETED".equals(status)) {
-                task.setFinalReward(report.getFinalReward());
-                task.setCompletedAt(LocalDateTime.now());
-            } else if ("FAILED".equals(status)) {
-                task.setErrorMessage(report.getErrorMessage());
-                task.setCompletedAt(LocalDateTime.now());
+        if (attemptMatched) {
+            TrainingTask task = taskMapper.selectById(taskId);
+            if (task != null) {
+                task.setStatus(status);
+                if ("COMPLETED".equals(status)) {
+                    task.setFinalReward(report.getFinalReward());
+                    task.setCompletedAt(LocalDateTime.now());
+                } else if ("FAILED".equals(status)) {
+                    task.setErrorMessage(report.getErrorMessage());
+                    task.setCompletedAt(LocalDateTime.now());
+                }
+                taskMapper.updateById(task);
+                LOG.info(">>> 任务数据库状态已更新: taskId={}, status={}", taskId, status);
+                
+                // 推送 WebSocket 状态更新到前端
+                messagingTemplate.convertAndSend("/topic/tasks", task);
+            } else {
+                LOG.warn(">>> 收到状态报告但任务不存在: taskId={}", taskId);
             }
-            taskMapper.updateById(task);
-            LOG.info(">>> 任务数据库状态已更新: taskId={}, status={}", taskId, status);
-            
-            // 推送 WebSocket 状态更新到前端
-            messagingTemplate.convertAndSend("/topic/tasks", task);
         } else {
-            LOG.warn(">>> 收到状态报告但任务不存在: taskId={}", taskId);
+            LOG.warn(">>> 丢弃过期 attempt 的状态上报: taskId={}, status={}, attempt={}, currentAttempt={}", taskId, status, reportAttempt, currentAttempt);
         }
 
         // 如果任务结束，清理 Redis 中的 TaskIDKey
@@ -148,6 +162,10 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
                 String taskKey = "worker:" + workerId + ":task";
                 redisTemplate.delete(taskKey);
                 LOG.info(">>> 任务结束，已释放 Worker [{}]", workerId);
+                schedulerService.tryDispatchQueuedTaskToWorker(workerId);
+            }
+            if (attemptMatched) {
+                schedulerService.releaseTaskOwner(taskId);
             }
         }
     }

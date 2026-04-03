@@ -1,269 +1,145 @@
 # 项目技术架构与实现总结 (Project Summary)
 
-本文档旨在梳理 **RL-Job-Scheduler** 项目（强化学习训练调度平台）的技术架构、核心功能及实现细节。
+本文档总结 **RL-Job-Scheduler**（强化学习训练调度平台）从单体 Demo 演进到“Gateway + Master + Worker”的阶段性成果：每个 Phase 的模块功能、实现方式、技术栈、架构逻辑、关键 bug 复盘，以及后续完善方向。
 
 ---
 
 ## 1. 项目定位 (Project Vision)
-这是一个轻量级、可扩展的分布式任务调度平台，专为管理耗时的强化学习（Reinforcement Learning）训练任务而设计。它解决了直接在命令行运行脚本时“缺乏管理、无法监控、数据易丢失”的痛点。
+平台目标是让 RL 训练任务具备“可提交、可追踪、可回放、可恢复、可扩展”的工程能力：
+- **任务管理**：提交/查询/分页/状态机（PENDING/RUNNING/COMPLETED/FAILED）。
+- **可观测性**：任务日志、WebSocket 实时推送、TraceId 贯穿排障。
+- **可扩展性**：从单机 Python 进程执行演进为分布式 Master-Worker 调度。
+- **可治理性**：引入网关完成鉴权、限流、降级、灰度等入口治理。
 
 ---
 
-## 2. 核心架构 (Architecture)
+## 2. 当前架构 (Current Architecture)
 
-### 2.1 技术栈概览
-| 层级 | 技术选型 | 作用 |
+### 2.1 组件与职责
+- **Gateway（Spring Cloud Gateway / WebFlux）**
+  - 统一入口、JWT 校验、Header 透传与签名、限流、超时降级、灰度路由、TraceId 注入与回写、Actuator 收敛。
+- **Master（Spring Boot MVC）**
+  - Web/UI + API、任务落库、调度中心（Redis 抢占 + 队列）、Netty RPC 服务端、日志汇聚（LogManager）、WebSocket 推送、对账/回收定时任务。
+- **Worker（Java Agent / Netty Client）**
+  - 常驻执行代理：连接 Master、接收任务、启动 Python 进程、推送日志/状态、自动重连、自维护 Redis 租约（续租）。
+- **Redis**
+  - Worker 存活/占用租约、调度抢占（Lua）、任务队列、任务 owner 映射、attempt（栅栏 token 的 currentAttempt）。
+- **MySQL**
+  - 任务与用户等业务数据的持久化（最终状态以 DB 为准）。
+- **Nacos**
+  - Gateway/Master 的服务注册发现（HTTP 层），支撑灰度路由（rl-master / rl-master-canary）。
+
+### 2.2 请求链路（HTTP / 鉴权 / 可观测性）
+1. 浏览器访问入口 `http://localhost:8081`（Gateway）。
+2. Gateway 生成/复用 `X-Trace-Id`，并在响应回写该 header。
+3. Gateway 校验 JWT（Cookie/Bearer），成功后透传 `X-User-*`，并对关键 header + timestamp 进行 HMAC 签名。
+4. Master 端验证网关签名头（可配置为“强制要求来自网关”），并建立认证上下文。
+5. Master 处理业务请求，日志中输出 `[traceId]`，便于按请求检索。
+
+### 2.3 调度链路（Master-Worker / 队列 / 恢复）
+1. 提交训练 -> Master 写 DB（PENDING）并返回 taskId。
+2. 若有空闲 Worker -> Redis Lua 原子抢占成功 -> Master 通过 Netty 下发 `ExecuteTaskRequest`。
+3. 若无空闲 Worker -> taskId 入队（去重）等待。
+4. Worker 心跳上报 `currentTaskId`；Master 在 Worker 空闲/任务结束时从队列 pop 并下发下一任务。
+5. Worker 启动 Python 进程，推送日志流与状态上报，Master 写日志并通过 WebSocket 推送前端。
+6. Master 定时对账：
+  - PENDING 对账：DB 中 PENDING 且存在 idle Worker 时，只补入队列（不直接 dispatch），避免任务被“遗忘”。
+  - RUNNING 回收：Worker 失联/租约消失时，将任务回收为 PENDING 并入队，避免 RUNNING 永久卡死。
+
+### 2.4 栅栏 token（attemptId，方案 A：Redis currentAttempt）
+目标是防止“重复执行时旧结果覆盖新结果”：
+- Master 下发任务前，Redis `INCR task:<taskId>:currentAttempt` 分配 attempt，并随请求下发给 Worker。
+- Worker 在 `TaskStatusReport` 中携带 attempt。
+- Master 仅当 `report.attempt == Redis.currentAttempt` 时才更新 DB/推送；否则丢弃旧 attempt 的结果。
+
+---
+
+## 3. 技术栈与实现架构 (Tech Stack & Design)
+| 模块 | 技术选型 | 关键用途 |
 | :--- | :--- | :--- |
-| **Web 层** | Spring Boot Web (MVC) | 处理 HTTP 请求，提供 API 和页面 |
-| **视图层** | Thymeleaf + Bootstrap 5 | 服务端渲染页面，提供友好的 UI |
-| **交互层** | jQuery (AJAX) | 实现无刷新提交、分页、弹窗交互 |
-| **业务层** | Spring Service + Async | 处理业务逻辑，异步调度耗时任务 |
-| **持久层** | MyBatis-Plus + MySQL 8 | 高效的数据库 CRUD 操作 |
-| **集成层** | Java ProcessBuilder + Python | 跨语言调用，执行真实训练脚本 |
-
-### 2.2 数据流向
-1.  **用户提交** -> Web 页面 (AJAX) -> Controller
-2.  **任务创建** -> Service (写入数据库状态 `PENDING`) -> 返回 Task ID
-3.  **异步执行** -> `@Async` 线程池 -> 启动 Python 子进程
-4.  **实时日志** -> Java 读取 Python stdout/stderr -> 写入 `logs/training_all.log`
-5.  **结果回写** -> 解析日志中的 `FINAL_REWARD` -> 更新数据库状态 `COMPLETED`
+| Web（Master） | Spring Boot 4 + MVC + Thymeleaf | 页面渲染与 HTTP API |
+| 安全 | Spring Security + JWT | 登录认证、用户隔离、网关信任边界 |
+| 网关 | Spring Cloud Gateway（WebFlux/Netty） | 入口鉴权、限流、降级、灰度、TraceId |
+| 注册发现 | Nacos | Gateway/Master 服务发现（rl-master/rl-master-canary） |
+| RPC | Netty | Master-Worker 长连接任务下发/日志/状态上报 |
+| 序列化 | Protobuf | RPC 消息结构化、低开销传输 |
+| 存储 | MySQL + MyBatis-Plus | 任务、用户等业务数据 |
+| 协调/缓存 | Redis + Lua | 抢占原子性、租约/队列、attempt |
+| 可观测性 | WebSocket(STOMP) + LogManager + TraceId | 实时状态/日志推送与排障关联 |
+| 脚本执行 | ProcessBuilder + Python（uv 管理依赖） | 启动真实训练脚本、日志采集 |
 
 ---
 
-## 3. 核心功能实现细节 (Implementation Details)
+## 4. Phase 总结（从 Demo 到 Phase 10）
 
-### 3.1 异步任务调度 (Async Task Scheduling)
-*   **痛点**：RL 训练可能持续数小时，HTTP 请求不能一直等待。
-*   **实现**：
-    *   使用 `@EnableAsync` 和 `@Async` 注解。
-    *   `TrainingService.startTraining` 负责创建记录并立即返回。
-    *   `TrainingExecutor.executeTraining` 在后台线程中运行，互不阻塞。
+### Phase 1-5（单体 Demo 基建）
+- **功能**：提交任务、异步执行 Python、MySQL 持久化、基础 UI、分页查询。
+- **实现要点**：`@Async` 执行、任务状态机、ProcessBuilder 捕获 stdout/stderr、日志落盘。
 
-### 3.2 数据库持久化 (Persistence)
-*   **痛点**：内存数据库 (H2) 重启即失；JPA 对于复杂 SQL 优化不便。
-*   **实现**：
-    *   采用 **MySQL 8.0** 作为存储引擎。
-    *   引入 **MyBatis-Plus**，利用其 `BaseMapper` 快速实现 CRUD，同时保留手写 SQL 的能力。
-    *   配置分页插件 `PaginationInnerInterceptor` 实现高效的分页查询。
+### Phase 6（认证与授权）
+- **功能**：Spring Security + JWT、多用户隔离（用户维度的数据隔离）。
+- **实现要点**：JWT 过滤器解析/注入认证上下文；Service 层按 userId 查询隔离。
 
-### 3.3 前端交互与可视化 (Frontend Interaction)
-*   **痛点**：传统的表单提交会刷新页面，体验差；报错直接显示 Whitelabel Error。
-*   **实现**：
-    *   **局部刷新**：利用 `WebController` 返回 HTML 片段 (`return "index :: task-list"`)，前端用 `$.get(...).replaceWith(...)` 动态更新表格，保留输入框状态。
-    *   **AJAX 提交**：拦截 `<form>` 的 submit 事件，使用 `$.post` 提交数据，成功后弹出 **Bootstrap Modal** 提示，彻底解决页面跳转导致的 Session/URL 问题。
+### Phase 7（实时交互）
+- **功能**：WebSocket 推送任务状态，前端无需轮询。
+- **实现要点**：STOMP topic `/topic/tasks`；Master 在状态更新时广播。
 
-### 3.4 跨语言调用与日志管理 (Cross-Language & Logging)
-*   **痛点**：Java 无法直接运行 Python 代码；多任务并发时日志混乱。
-*   **实现**：
-    *   **ProcessBuilder**：构建命令行参数 `python scripts/train.py --algo PPO ...`。
-    *   **流合并**：使用 `redirectErrorStream(true)` 将标准错误合并到标准输出，避免死锁。
-    *   **共享日志**：所有任务日志写入同一个文件 `logs/training_all.log`，每行日志带上 `[Task-ID]` 前缀，既便于管理又便于检索。
-    *   **结果协议**：约定 Python 脚本最后输出 `FINAL_REWARD:xxx`，Java 捕获该行并解析入库。
+### Phase 8（实时日志监控）
+- **功能**：日志聚合 + Tailer + WebSocket 分 topic 推送，支持历史回填。
+- **实现要点**：按 taskId 分发日志流，前端控制台实时追加。
 
-### 3.5 实时交互优化 (WebSocket Implementation)
-*   **痛点**：AJAX 轮询效率低，状态更新有延迟。
-*   **实现**：
-    *   **STOMP over WebSocket**：利用 Spring Boot WebSocket 建立持久连接。
-    *   **实时推送**：`TrainingExecutor` 在更新数据库状态的同时，通过 `SimpMessagingTemplate` 向 `/topic/tasks` 发送实时数据。
-    *   **局部刷新**：前端监听到更新后，精准修改表格中对应行的 DOM，无需全量重载。
+### Phase 9（分布式调度）
+- **功能**：Master-Worker 架构，Netty+Protobuf 下发任务/上传日志/上报状态。
+- **实现要点**：
+  - Redis Lua 原子抢占 Worker
+  - Worker 侧执行 Python 并推送日志/状态
+  - Master 侧 LogManager 解耦 Netty EventLoop 与 IO
+  - 任务结束释放占用 Key 并触发队列继续下发
 
-### 3.6 实时日志监控 (Log Streaming Implementation)
-*   **痛点**：用户无法实时看到 Python 训练脚本的输出，黑盒运行。
-*   **实现**：
-    *   **全局 Tailer**：使用 `Apache Commons IO` 的 `Tailer` 类，开启单线程异步监听 `logs/training.log` 文件。
-    *   **正则解析**：`GlobalLogTailerListener` 通过正则捕获日志中的 `[TaskID]`。
-    *   **精准广播**：利用 WebSocket 动态 Topic `/topic/logs/{taskId}`，将日志行推送到订阅该任务的前端控制台。
-    *   **历史回填 (History Backfill)**：新增 `GET /api/monitor/logs/{taskId}` 接口。前端打开日志窗口时，会先通过该接口加载已持久化的历史日志，加载完成后再自动切入 WebSocket 实时流模式，解决了“关闭弹窗再打开日志丢失”的问题。
-    *   **前端渲染**：自定义深色控制台 UI，支持时间戳着色及自动滚动。
-
-### 3.7 系统稳定性与监控 (Stability & Monitoring)
-*   **进程超时控制**：在 `TrainingExecutor` 中为 `process.waitFor` 设置了 **2 小时** 超时时间。若 Python 脚本因算法死循环或环境问题挂起，Java 将强制执行 `process.destroyForcibly()` 并释放线程。
-*   **线程池健康检查**：新增 `/api/monitor/health` 接口，实时返回 `trainingTaskExecutor` 的活跃线程数、队列积压情况及已完成任务数，便于排查系统阻塞问题。
+### Phase 10（网关与流量治理）
+- **功能**：
+  - 统一入口（Gateway）+ Nacos 服务发现
+  - JWT 鉴权（网关）+ Master 信任网关签名头
+  - 限流（Redis）/超时降级（友好错误页）/TraceId
+  - 灰度路由（Header/白名单/百分比）到 `rl-master-canary`
+  - Actuator 暴露收敛（网关）
+- **实现要点**：
+  - 网关对 Header 进行 HMAC 签名，Master 校验后才信任 `X-User-*`
+  - 统一错误页排除转发/鉴权，避免重定向循环
+  - 通过响应头标注 canary/上游服务，方便验证分流效果
 
 ---
 
-## 4. 目录结构说明
+## 5. 关键 Bug 复盘（已修复）
+- **网关降级页重定向过多**：错误页路径被路由转发或被鉴权拦截，导致 fallback -> redirect 无限循环。修复：错误页从转发与鉴权白名单中排除，并排除 fallback 处理。
+- **任务“被遗忘”**：所有 Worker 忙导致新任务 PENDING，后续 Worker 空闲也不再调度。修复：引入 Redis 队列 + “空闲/完成触发 pop 下发” + DB PENDING 对账补入队列。
+- **RUNNING 卡死**：Worker 宕机导致 task 永远 RUNNING。修复：租约 + owner 映射 + RUNNING 回收器，将孤儿任务回收为 PENDING 并入队。
+- **Master 重启后 Worker 连不上**：RPC Server 被禁用或 Worker 连接地址错误。修复：RPC enabled 开关明确、Worker 支持通过 env/args 配置 host/port，并实现断线自动重连。
+- **测试环境定时任务误触发**：H2 未建表导致 scheduled 查询报错。修复：测试 profile 中关闭队列/对账/回收定时任务。
+
+---
+
+## 6. 目录结构（当前）
 ```text
-src/main/java/com/example/demo/
-├── config/             # MybatisPlusConfig (分页配置)
-├── controller/         # WebController (页面/AJAX接口)
-├── dto/                # TrainingRequest/Result (数据传输)
-├── entity/             # TrainingTask (数据库映射)
-├── mapper/             # TrainingTaskMapper (DAO层)
-├── service/            # TrainingService (业务), TrainingExecutor (异步执行)
-└── DemoApplication.java
+gateway/                         # Spring Cloud Gateway（独立 Maven 工程）
+  src/main/java/...              # 过滤器：JWT/TraceId/限流/降级/灰度路由
+  src/main/resources/application.yaml
 
-src/main/resources/
-├── templates/          # index.html (前端模板)
-├── application.properties # 数据库/日志配置
-└── schema.sql          # 数据库初始化脚本
-
-scripts/
-└── train.py            # 被调用的 Python 训练脚本
-logs/
-└── training_all.log    # 统一运行日志
-```
-
----
-
-## 5. 未来展望 (Future Work)
-*   **WebSocket 集成**：将 `logs/training_all.log` 的增量内容实时推送到前端，实现“类似控制台”的实时监控体验。
-*   **Docker 化**：将 MySQL、Java 应用和 Python 环境打包成 Docker Compose，一键部署。
-*   **算法扩展**：对接真实的 PyTorch/TensorFlow 训练代码，支持 GPU 调度。
-*   **MDC 传播 (可观测性增强)**：当前 TraceId 主要覆盖同步 HTTP 请求链路；后续可在 `@Async` 线程池、队列消费线程 (LogManager) 等异步边界实现 MDC/TraceId 传播（或显式携带 traceId），以便用同一个 TraceId 串联“请求 -> 调度 -> 执行 -> 日志/状态上报”的全链路排障。避免 ThreadLocal 泄漏导致串台，需确保每次任务结束清理 MDC。
-
-# RL-Job-Scheduler Advanced Roadmap (高级功能规划)
-
-本文档详细规划了项目从单机 Demo 向 **分布式企业级平台** 演进的五个关键阶段 (Phase 6 - Phase 10)。
-
----
-
-## 🔐 Phase 6: 统一认证与授权 (Monolithic Security)
-> **目标**: 在现有单体架构下，构建坚固的安全基石，实现多用户隔离。
-
-### 1. 核心痛点
-- 目前系统是“裸奔”的，任何人只要知道 URL 就能提交任务、删除数据。
-- 无法区分是谁提交的任务。
-
-### 2. 技术栈详解
-- **安全框架**: **Spring Security**
-    - Java 领域事实上的安全标准，提供强大的认证（Authentication）和授权（Authorization）能力。
-- **认证方式**: **JWT (JSON Web Token)**
-    - 无状态认证机制。登录成功后服务器签发 Token，后续请求携带 Token，服务器解密校验即可，无需查库。
-- **权限模型**: **RBAC (Role-Based Access Control)**
-    - 定义角色：`ADMIN` (管理所有), `USER` (管理自己)。
-
-### 3. 实现流程
-1.  **用户体系**: 新增 `User` 表 (id, username, password_hash, role)。
-2.  **安全配置**: 编写 `SecurityConfig`，配置拦截规则（`/api/login` 放行，其他需认证）。
-3.  **登录逻辑**: 实现登录接口，校验密码（BCrypt），签发 JWT。
-4.  **Token 过滤器**: 实现 `JwtAuthenticationFilter`，拦截请求头中的 `Authorization: Bearer xxx`，解析 Token 并注入 SecurityContext。
-5.  **数据隔离**: 修改 `TrainingTask` 表，增加 `user_id` 字段。Service 层查询时自动过滤当前用户的数据。
-
----
-
-## 📅 Phase 7: 实时交互优化 (Real-time Interaction)
-> **目标**: 彻底消除前端的无效轮询 (AJAX Polling)，实现低延迟的状态同步。
-
-### 1. 技术实现细节
-*   **后端配置 (STOMP over WebSocket)**:
-    *   在 [WebSocketConfig.java](file:///c:\Users\13253\dataDisk\java_code\Welcome\RL-Job-Scheduler\src\main\java\org\sgj\rljobscheduler\config\WebSocketConfig.java) 中通过 `@EnableWebSocketMessageBroker` 开启 STOMP 协议。
-    *   配置内存级消息代理 `/topic`，并注册 `/ws` 端点，支持 `SockJS` 降级方案。
-*   **主动推送机制**:
-    *   在 [TrainingExecutor.java](file:///c:\Users\13253\dataDisk\java_code\Welcome\RL-Job-Scheduler\src\main\java\org\sgj\rljobscheduler\service\TrainingExecutor.java) 中集成 `SimpMessagingTemplate`。
-    *   每当任务状态由 `PENDING` 变为 `RUNNING` 或 `COMPLETED` 时，后端立即向 `/topic/tasks` 频道广播最新的任务实体 JSON。
-*   **前端精准渲染**:
-    *   [index.html](file:///c:\Users\13253\dataDisk\java_code\Welcome\RL-Job-Scheduler\src\main\resources\templates\index.html) 使用 `Stomp.js` 订阅主题。
-    *   通过 jQuery 监听消息回调，利用 `task.id` 唯一定位表格行，仅更新“状态”、“奖励”和“完成时间”等关键字段，实现无感刷新。
-
-### 2. 故障复盘 (Error Analysis)
-在实现过程中，项目曾遇到以下核心报错，均已解决：
-*   **端口 8080 冲突**: 僵尸 Java 进程未释放端口导致启动失败。**对策**: 使用 `taskkill` 清理占用。
-*   **MySQL 8.0 连接异常**: 报错 `Public Key Retrieval is not allowed`。**对策**: 在 JDBC URL 增加 `allowPublicKeyRetrieval=true`。
-*   **Java 语法与包路径错误**:
-    *   [ObjectMapperConfig.java](file:///c:\Users\13253\dataDisk\java_code\Welcome\RL-Job-Scheduler\src\main\java\org\sgj\rljobscheduler\config\ObjectMapperConfig.java) 中存在多余分号 `;` 导致编译失败。
-    *   Spring Boot 4.0.3 环境下 Jackson 路径变更为 `tools.jackson.databind`。
-*   **SQL 保留字冲突**: 数据库表名 `user` 未加反引号导致初始化失败。**对策**: 在 [schema.sql](file:///c:\Users\13253\dataDisk\java_code\Welcome\RL-Job-Scheduler\src\main\resources\schema.sql) 中使用 `` `user` ``。
-
----
-
-## 📺 Phase 8: 实时日志监控 (Log Streaming)
-> **目标**: 在网页上实现类似 `tail -f` 的效果，实时监控训练进度。
-
-### 1. 技术实现细节
-*   **多流异步消费**:
-    *   `TrainingExecutor` 不再重定向错误流，而是利用 `CompletableFuture` 开启两个独立线程分别消费 Python 进程的 stdout 和 stderr。
-*   **日志持久化策略**:
-    *   **独立日志**: 每个任务生成 `logs/{taskId}.log` (标准输出) 和 `logs/{taskId}error.log` (错误输出)，保持原始输出纯净。
-    *   **聚合日志**: 所有流同步追加到 `logs/training.log`，并统一加上 `[时间戳] [TaskID]` 前缀。
-*   **实时推送 (WebSocket)**:
-    *   `GlobalLogTailerListener` 监听聚合日志文件，利用正则精准提取 TaskID 并广播至 `/topic/logs/{taskId}`。
-*   **前端控制台**:
-    *   自定义深色模态框 UI，支持日志着色、自动滚动及实时追加。
-
-### 2. 系统稳定性增强
-*   **隔离线程池**: 引入 `trainingTaskExecutor` (核心4/最大8线程)，确保长耗时 RL 任务不阻塞 Web 服务。
-*   **进程超时杀灭**: 为 Python 进程设置 **2 小时** 强制超时，防止算法死循环导致僵尸进程积压。
-*   **健康监控**: 提供 `/api/monitor/health` 接口，实时输出线程池活跃度及队列积压情况。
-
----
-
-## 4. 目录结构说明
-```text
 src/main/java/org/sgj/rljobscheduler/
-├── config/             # SecurityConfig, WebSocketConfig, MybatisPlusConfig, AsyncConfig
-├── controller/         # WebController, TrainingController, AuthController, MonitorController
-├── dto/                # TrainingRequest, TrainingResult
-├── entity/             # TrainingTask, User
-├── mapper/             # TrainingTaskMapper, UserMapper
-├── service/            # TrainingService, TrainingExecutor, AuthService
-└── RlJobSchedulerApplication.java
+  master/                        # Web + 调度中心 + Netty Server
+  worker/                        # WorkerAgent + Netty Client + Python 执行
+  common/                        # Netty 协议与 Protobuf 生成类
 
-logs/
-├── training.log        # 聚合日志 (包含所有任务，用于实时推送)
-├── {taskId}.log        # 单个任务的标准输出日志
-└── {taskId}error.log   # 单个任务的错误输出日志
+src/main/proto/protocol.proto    # Protobuf 协议（心跳/下发/日志/状态/attempt）
+logs/                            # Master 日志与任务日志
+server_log/                      # Worker 本地任务日志（模拟目录）
 ```
-## ☁️ Phase 9: 分布式调度 (Distributed Scheduling & RPC)
-
-> **目标**: 构建 Master-Worker 架构，将计算任务分发到不同的计算节点执行，实现算力横向扩展。
-
-### 1. 技术栈
-- **RPC 通信**: **Netty** (高性能 NIO) + **Protobuf** (二进制序列化)
-- **注册中心**: **Redis** (基于 Lua 脚本实现原子性抢占与心跳管理)
-- **解耦架构**: Master 引入 **LogManager** (异步阻塞队列) 隔离网络 IO 与文件 IO
-
-### 2. 实现细节
-- **目录结构重构**: 
-    - 划分为 `common` (共享协议与编解码)、`master` (Web 控制中心与调度大脑)、`worker` (轻量级执行 Agent)。
-- **自定义二进制协议**: 
-    - 包含 MagicNumber (0xCAFEBABE)、Version、FullLen、MsgType，有效解决 TCP 粘包/拆包问题。
-- **分布式状态机**: 
-    - 实现 `IDLE` / `PENDING` / `RUNNING` / `DOWN` 四种状态。
-    - **抢占机制**: Master 使用 Redis Lua 脚本原子性锁定 Worker，防止任务重复下发。
-    - **续期容错**: Worker 在心跳中携带 `currentTaskId`，Master 自动为 Redis 中的 `TaskIDKey` 续期，防止因网络抖动导致 Worker 被“错杀”。
-- **异步日志流处理**: 
-    - **Worker 端**: 拦截 Python 进程输出，本地存入 `server_log/` 模拟目录，同时通过 RPC 推送。
-    - **Master 端**: `LogManager` 消费者线程将日志写入 `logs/` 并同步触发 WebSocket 旁路推送。
-- **全链路异常处理**: 
-    - 捕获并回传 Python 执行的具体错误（如 `uv` 命令未找到），Master 将报错信息持久化到 SQL 数据库。
-    - 任务结束（COMPLETED/FAILED）时，Master 自动释放 Redis 中的 Worker 锁定。
-
-### 3. Bug 修复记录
-- [x] **Redis 连接异常**: 修复了 Redis 未启动或密码配置错误导致的调度崩溃，增加了 Try-Catch 容错。
-- [x] **UI 状态不更新**: 解决了分布式环境下状态报告未通过 WebSocket 推送前端导致的“假 Pending”问题。
-- [x] **Worker 无法释放**: 实现了 `Channel` 属性绑定 `workerId`，确保任务结束时能精准删除 Redis 占用 Key。
-- [x] **Bean 注入失败**: 修复了重构期间丢失 `AsyncConfig` 导致 Master 启动失败的 Bug。
 
 ---
 
-## 🌐 Phase 10: 微服务网关重构 (Microservices Gateway)
-> **目标**: 当业务极其复杂、团队规模扩大时，将单体应用拆分为微服务集群。
-
-### 1. 核心痛点
-- 随着 Phase 9 的完成，系统已经有了 Master 和 Worker，架构逐渐复杂。
-- 需要统一的流量入口来处理限流、熔断、灰度发布等高级治理需求。
-
-### 2. 技术栈详解
-- **网关**: **Spring Cloud Gateway** (基于 WebFlux/Netty)
-- **鉴权**: **Spring Security OAuth2** (作为独立的认证中心)
-- **注册中心**: **Nacos** (服务发现)
-
-### 3. 演进策略
-1.  **物理拆分**: 将现在的 `DemoApplication` 拆分为 `Auth Service` (认证)、`Job Service` (业务)、`Gateway` (网关)。
-2.  **网关接入**: 所有外部请求走 Gateway，Gateway 负责校验 OAuth2 Token，然后转发给后端服务。
-3.  **全链路异步**: 逐步将核心业务改造为 WebFlux，实现极致吞吐。
-
----
-
-## 📊 总结与演进路线
-
-| 阶段 | 核心价值 | 关键技术 | 复杂度 |
-| :--- | :--- | :--- | :--- |
-| **Phase 6** | **安全性 (单体)** | Spring Security, JWT | ⭐⭐⭐ |
-| **Phase 7** | **体验升级** | WebSocket, STOMP | ⭐⭐ |
-| **Phase 8** | **可观测性** | IO Tailer, Xterm.js | ⭐⭐ |
-| **Phase 9** | **高性能 (分布式)** | **Netty**, RPC, Protobuf | ⭐⭐⭐⭐⭐ |
-| **Phase 10** | **微服务架构** | **Spring Cloud Gateway**, OAuth2 | ⭐⭐⭐⭐⭐ |
-
-**当前任务**: 聚焦 **Phase 6**，为单体应用穿上铠甲！🛡️
+## 7. 未来完善方向 (Future Work)
+- **MDC 传播（可观测性增强）**：在 `@Async`/队列消费线程等异步边界传播 traceId 或显式携带，串联“请求 -> 调度 -> 执行 -> 上报”全链路；同时避免 ThreadLocal 泄漏串台。
+- **Master 冷启动（warming-up）**：启动初期只入队不调度，待 Worker 心跳稳定后再开始调度，减少窗口期误派发。
+- **RPC 发现与高可用**：Worker 增加多 Master 地址轮询或接入 Nacos 发现；进一步做 Master 单活/选主，避免 Worker 分裂连接。
+- **attempt 生命周期收敛**：任务结束后清理/缩短 `currentAttempt` TTL；为日志/监控补充 attempt 维度排障能力。
+- **治理与监控**：网关限流/降级增加更标准的可观测指标（Prometheus/Micrometer），对队列长度、回收次数、重试次数等建立仪表盘与报警。
