@@ -6,6 +6,7 @@ import org.sgj.rljobscheduler.common.netty.MessageHeader;
 import org.sgj.rljobscheduler.common.netty.MessageType;
 import org.sgj.rljobscheduler.common.netty.NettyMessage;
 import org.sgj.rljobscheduler.common.proto.ExecuteTaskRequest;
+import org.sgj.rljobscheduler.master.annotation.Loggable;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.netty.ChannelManager;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
@@ -62,6 +63,7 @@ public class SchedulerService {
      * 扫描所有 worker:*:task key，恢复 RunningTaskRecovery 无法处理的边界情况
      */
     @PostConstruct
+    @Loggable(level = Loggable.LogLevel.INFO, logExecutionTime = true)
     public void reconstructWorkerTasksFromRedis() {
         LOG.info(">>> [SchedulerService] 开始从 Redis 重建 Worker 任务状态...");
         try {
@@ -110,6 +112,7 @@ public class SchedulerService {
         return scheduleTask(task, null);
     }
 
+    @Loggable(level = Loggable.LogLevel.INFO, logParams = true, logExecutionTime = true)
     public boolean scheduleTask(TrainingTask task, String traceId) {
         try {
             String effectiveTraceId = (traceId == null || traceId.isBlank()) ? "unknown" : traceId;
@@ -145,6 +148,7 @@ public class SchedulerService {
         }
     }
 
+    @Loggable(level = Loggable.LogLevel.INFO, logParams = true, logExecutionTime = true)
     public boolean tryDispatchQueuedTaskToWorker(String workerId) {
         if (!queueEnabled) {
             return false;
