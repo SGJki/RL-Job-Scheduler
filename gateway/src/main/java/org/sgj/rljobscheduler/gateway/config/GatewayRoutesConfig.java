@@ -45,6 +45,11 @@ public class GatewayRoutesConfig {
                                 .addResponseHeader("X-Canary", "false")
                                 .addResponseHeader("X-Upstream-Service", "rl-master"))
                         .uri("lb://rl-master"))
+                // AI Interview API routes
+                .route("ai-interview-api", r -> r.path("/api/interview/**", "/api/train/**", "/api/knowledge/**")
+                        .filters(f -> f.rewritePath("/api(?<segment>/.*)", "${segment}")
+                                .addResponseHeader("Access-Control-Allow-Origin", "*"))
+                        .uri("http://localhost:8000"))
                 .build();
     }
 

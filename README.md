@@ -225,7 +225,7 @@ scripts/                 # Python 训练脚本
 
 ```bash
 # 1. 启动 MySQL
-net start mysql
+net start MySQL80
 
 # 2. 启动 Nacos (单机模式)
 startup.cmd -m standalone

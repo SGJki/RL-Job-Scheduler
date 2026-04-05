@@ -9,7 +9,7 @@ RL-Job-Scheduler is a distributed backend system for managing and scheduling Rei
 ## Build Commands
 
 ```bash
-# Build entire project (generates Protobuf code)
+# Build entire project (generates Protobuf code automatically)
 ./mvnw clean package
 
 # Build only root module
@@ -18,15 +18,23 @@ RL-Job-Scheduler is a distributed backend system for managing and scheduling Rei
 # Build gateway module only
 ./mvnw -f gateway/pom.xml clean package
 
-# Run tests
+# Run all tests
 ./mvnw test
+
+# Run a single test
+./mvnw test -Dtest=TestController
 
 # Run Master service
 ./mvnw spring-boot:run
 
 # Run Gateway service
 ./mvnw -f gateway/pom.xml spring-boot:run
+
+# Run Worker agent (requires compiled classes)
+java -cp "target/classes;target/dependency/*" org.sgj.rljobscheduler.worker.WorkerAgent
 ```
+
+**Note**: Protobuf files in `src/main/proto/` auto-generate Java classes via `protobuf-maven-plugin` during the `compile` phase. No manual code generation step needed.
 
 ## Architecture
 
@@ -51,10 +59,13 @@ RL-Job-Scheduler is a distributed backend system for managing and scheduling Rei
 
 ### Module Structure
 
+This is a multi-module Maven project:
+
 | Module | Port | Purpose |
 |--------|------|---------|
+| Root (`pom.xml`) | 8082 | Master scheduler, task management, Netty RPC |
 | `gateway/` | 8081 | API Gateway with JWT auth, rate limiting, canary routing |
-| `src/main/java/.../master/` | 8082 | Scheduler, task management, WebSocket, Netty server |
+| `src/main/java/.../master/` | - | Scheduler, task management, WebSocket, Netty server |
 | `src/main/java/.../worker/` | Agent | Lightweight agent for Python execution |
 | `src/main/java/.../common/` | - | Shared Protobuf definitions, Netty codecs |
 
@@ -102,13 +113,14 @@ Workers cycle through: `IDLE` → `RUNNING` → `PENDING` (if heartbeat lost) �
 
 ## Testing
 
-Tests are in `src/test/java/`. Key test files:
+Tests are in `src/test/java/`:
 - `RlJobSchedulerApplicationTests.java` - Application context test
 - `TestController.java` - Controller tests
 
+Run a single test class: `./mvnw test -Dtest=TestController`
+
 ## Development Notes
 
-- Protobuf files in `src/main/proto/` generate Java classes via `protobuf-maven-plugin`
 - JWT tokens use JJWT library (io.jsonwebtoken)
 - WebSocket endpoints at `/ws` with STOMP for real-time task updates
 - Task logs stored in `logs/<taskId>.log` with traceId correlation

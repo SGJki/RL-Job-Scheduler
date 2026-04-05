@@ -4,7 +4,11 @@
       "Bash(./mvnw -f gateway/pom.xml compile -q)",
       "Bash(gh pr:*)",
       "Bash(./mvnw compile:*)",
-      "Bash(./mvnw test:*)"
+      "Bash(./mvnw test:*)",
+      "Bash(./mvnw clean:*)",
+      "Bash(./mvnw help:effective-pom -Doutput=effective-pom.xml)",
+      "Bash(curl -s \"https://search.maven.org/solrsearch/select?q=g:org.springframework.boot+AND+a:spring-boot-starter-parent&rows=5&wt=json\")",
+      "Bash(./mvnw help:evaluate -Dexpression=spring-boot.version -q -DforceStdout)"
     ]
   }
 }
