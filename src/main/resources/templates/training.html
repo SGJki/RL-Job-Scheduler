@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title>AI Training</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .container { max-width: 800px; margin-top: 30px; }
+        .chat-container { background-color: #f8f9fa; border-radius: 8px; padding: 20px; min-height: 400px; }
+        .message { margin-bottom: 15px; padding: 10px 15px; border-radius: 10px; max-width: 80%; }
+        .message.question { background-color: #17a2b8; color: white; margin-right: auto; }
+        .message.answer { background-color: #28a745; color: white; margin-left: auto; text-align: right; }
+        .message.feedback { background-color: #ffc107; color: #212529; margin-left: auto; font-size: 0.9em; }
+        .message.system { background-color: #6c757d; color: white; text-align: center; font-size: 0.85em; }
+        .question-type { font-size: 0.75em; opacity: 0.8; }
+        .question-meta { font-size: 0.8em; opacity: 0.7; margin-bottom: 5px; }
+        .status-badge { padding: 5px 10px; border-radius: 5px; font-size: 0.85em; }
+        .status-active { background-color: #d4edda; color: #155724; }
+        .status-completed { background-color: #cce5ff; color: #004085; }
+        .skill-tag { display: inline-block; background-color: #e2e6ea; padding: 3px 10px; border-radius: 12px; font-size: 0.85em; margin-right: 5px; }
+        .loading { text-align: center; padding: 20px; }
+    </style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</head>
+<body>
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>AI Training</h2>
+        <div>
+            <span class="me-3" id="userInfo"></span>
+            <a href="/" class="btn btn-outline-secondary btn-sm">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <!-- Start Training Form -->
+    <div class="card mb-4" id="startSection">
+        <div class="card-header bg-info text-white">
+            Start Skill Training
+        </div>
+        <div class="card-body">
+            <form id="startForm">
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Resume ID</label>
+                        <input type="text" class="form-control" name="resume_id" id="resumeId" required placeholder="e.g., resume-001">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Session ID</label>
+                        <input type="text" class="form-control" name="session_id" id="sessionId" required placeholder="e.g., session-001">
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Skill Point</label>
+                        <select class="form-select" name="skill_point" id="skillPoint" required>
+                            <option value="">Select a skill...</option>
+                            <option value="Redis">Redis</option>
+                            <option value="MySQL">MySQL</option>
+                            <option value="Java">Java</option>
+                            <option value="Python">Python</option>
+                            <option value="Docker">Docker</option>
+                            <option value="Kubernetes">Kubernetes</option>
+                            <option value="Microservices">Microservices</option>
+                            <option value="System Design">System Design</option>
+                            <option value="Distributed Systems">Distributed Systems</option>
+                            <option value="API Design">API Design</option>
+                        </select>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Knowledge Base ID (Optional)</label>
+                        <input type="text" class="form-control" name="knowledge_base_id" id="knowledgeBaseId" placeholder="e.g., kb-001">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-info w-100 text-white" id="startBtn">Start Training</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Training Chat Area -->
+    <div class="card" id="trainingSection" style="display: none;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <span id="sessionInfo">Training Session</span>
+            <span class="status-badge status-active" id="statusBadge">Active</span>
+        </div>
+        <div class="card-body">
+            <div class="mb-3">
+                <strong>Training Skill:</strong> <span class="skill-tag" id="currentSkill">-</span>
+            </div>
+            <div class="chat-container" id="chatContainer">
+                <div class="loading" id="loadingIndicator">Preparing training session</div>
+            </div>
+        </div>
+        <div class="card-footer" id="answerSection" style="display: none;">
+            <div class="input-group">
+                <textarea class="form-control" id="answerInput" rows="2" placeholder="Type your answer here..."></textarea>
+                <button class="btn btn-info" id="submitAnswerBtn">Submit Answer</button>
+            </div>
+            <div class="mt-2">
+                <button class="btn btn-outline-secondary btn-sm" id="endTrainingBtn">End Training</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Final Results -->
+    <div class="card mt-4" id="resultsSection" style="display: none;">
+        <div class="card-header bg-success text-white">
+            Training Completed
+        </div>
+        <div class="card-body" id="finalResultsContent"></div>
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    var currentSessionId = null;
+    var currentQuestionId = null;
+    var currentSkill = null;
+    var eventSource = null;
+    var isTrainingActive = false;
+
+    // Display user info
+    $.get('/api/auth/me', function(user) {
+        $('#userInfo').text('Welcome, ' + (user.username || 'User'));
+    }).fail(function() {
+        $('#userInfo').text('Welcome');
+    });
+
+    // Start training
+    $('#startForm').submit(function(e) {
+        e.preventDefault();
+        startTraining();
+    });
+
+    function startTraining() {
+        var skill = $('#skillPoint').val();
+        if (!skill) {
+            alert('Please select a skill point');
+            return;
+        }
+
+        var request = {
+            resume_id: $('#resumeId').val(),
+            session_id: $('#sessionId').val(),
+            skill_point: skill
+        };
+        if ($('#knowledgeBaseId').val()) {
+            request.knowledge_base_id = $('#knowledgeBaseId').val();
+        }
+
+        $.ajax({
+            url: '/api/train/start',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify(request),
+            success: function(response) {
+                currentSessionId = response.session_id;
+                currentSkill = response.skill_point;
+                isTrainingActive = true;
+
+                $('#startSection').hide();
+                $('#trainingSection').show();
+                $('#currentSkill').text(currentSkill);
+                $('#sessionInfo').text('Session: ' + currentSessionId);
+                $('#chatContainer').empty();
+                $('#loadingIndicator').show();
+
+                if (response.first_question) {
+                    currentQuestionId = response.first_question.question_id;
+                    appendQuestion(response.first_question);
+                    $('#answerSection').show();
+                    $('#answerInput').focus();
+                }
+
+                connectSSE();
+            },
+            error: function(xhr) {
+                alert('Failed to start training: ' + (xhr.responseJSON?.detail || 'Unknown error'));
+            }
+        });
+    }
+
+    function connectSSE() {
+        if (eventSource) {
+            eventSource.close();
+        }
+
+        eventSource = new EventSource('/api/interview/question?session_id=' + encodeURIComponent(currentSessionId));
+
+        eventSource.addEventListener('question', function(e) {
+            var data = JSON.parse(e.data);
+            currentQuestionId = data.question_id;
+            appendQuestion(data);
+            $('#loadingIndicator').hide();
+            $('#answerSection').show();
+            $('#answerInput').prop('disabled', false).focus();
+        });
+
+        eventSource.addEventListener('feedback', function(e) {
+            var data = JSON.parse(e.data);
+            appendFeedback(data);
+        });
+
+        eventSource.addEventListener('end', function(e) {
+            var data = JSON.parse(e.data);
+            isTrainingActive = false;
+            $('#statusBadge').removeClass('status-active').addClass('status-completed').text('Completed');
+            $('#answerSection').hide();
+            $('#answerInput').prop('disabled', true);
+            appendSystemMessage('Training completed! Great job!');
+            showFinalResults(data);
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+            }
+        });
+
+        eventSource.onerror = function() {
+            if (isTrainingActive) {
+                appendSystemMessage('Connection lost. Attempting to reconnect...');
+            }
+        };
+    }
+
+    function appendQuestion(question) {
+        var typeLabel = question.question_type || 'initial';
+        var html = '<div class="message question">';
+        html += '<div class="question-meta">Q' + question.series + '.' + question.number + ' [' + typeLabel + ']</div>';
+        html += '<div>' + question.content + '</div>';
+        html += '</div>';
+        $('#chatContainer').append(html);
+        scrollToBottom();
+    }
+
+    function appendFeedback(feedback) {
+        var html = '<div class="message feedback">';
+        html += '<strong>Feedback:</strong> ' + feedback.content;
+        if (feedback.guidance) {
+            html += '<br><em>Guidance: ' + feedback.guidance + '</em>';
+        }
+        html += '</div>';
+        $('#chatContainer').append(html);
+        scrollToBottom();
+    }
+
+    function appendAnswer(answer) {
+        var html = '<div class="message answer">';
+        html += '<div class="question-meta">Your Answer:</div>';
+        html += '<div>' + answer + '</div>';
+        html += '</div>';
+        $('#chatContainer').append(html);
+        scrollToBottom();
+    }
+
+    function appendSystemMessage(message) {
+        var html = '<div class="message system">' + message + '</div>';
+        $('#chatContainer').append(html);
+        scrollToBottom();
+    }
+
+    function scrollToBottom() {
+        var container = $('#chatContainer');
+        container.scrollTop(container[0].scrollHeight);
+    }
+
+    // Submit answer
+    $('#submitAnswerBtn').click(function() {
+        var answer = $('#answerInput').val().trim();
+        if (!answer) {
+            alert('Please enter an answer');
+            return;
+        }
+        if (!currentSessionId || !currentQuestionId) {
+            alert('No active training session');
+            return;
+        }
+
+        $('#answerInput').prop('disabled', true);
+        appendAnswer(answer);
+        $('#loadingIndicator').show().text('Evaluating...');
+
+        $.ajax({
+            url: '/api/train/answer',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+                session_id: currentSessionId,
+                question_id: currentQuestionId,
+                user_answer: answer
+            }),
+            success: function(response) {
+                $('#answerInput').val('');
+                currentQuestionId = response.question_id;
+
+                if (response.feedback) {
+                    appendFeedback(response.feedback);
+                }
+
+                if (response.next_question_content) {
+                    appendQuestion({
+                        question_id: response.next_question_id,
+                        content: response.next_question_content,
+                        series: 1,
+                        number: 1,
+                        question_type: 'followup'
+                    });
+                    $('#answerInput').prop('disabled', false).focus();
+                }
+
+                if (!response.should_continue || response.interview_status === 'completed') {
+                    endTraining();
+                }
+
+                $('#loadingIndicator').hide();
+            },
+            error: function(xhr) {
+                alert('Failed to submit answer: ' + (xhr.responseJSON?.detail || 'Unknown error'));
+                $('#answerInput').prop('disabled', false);
+                $('#loadingIndicator').hide();
+            }
+        });
+    });
+
+    // End training
+    $('#endTrainingBtn').click(function() {
+        if (!currentSessionId) return;
+        endTraining();
+    });
+
+    function endTraining() {
+        if (!currentSessionId) return;
+        isTrainingActive = false;
+
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+
+        $.ajax({
+            url: '/api/train/end?session_id=' + encodeURIComponent(currentSessionId),
+            method: 'POST',
+            success: function(response) {
+                $('#statusBadge').removeClass('status-active').addClass('status-completed').text('Completed');
+                $('#answerSection').hide();
+                appendSystemMessage('Training ended.');
+                showFinalResults(response);
+            },
+            error: function(xhr) {
+                alert('Failed to end training: ' + (xhr.responseJSON?.detail || 'Unknown error'));
+            }
+        });
+    }
+
+    function showFinalResults(data) {
+        var html = '<h5>Training Summary</h5>';
+        if (data.final_feedback) {
+            var fb = data.final_feedback;
+            html += '<p><strong>Overall Score:</strong> ' + (fb.overall_score * 100).toFixed(0) + '%</p>';
+            if (fb.strengths && fb.strengths.length > 0) {
+                html += '<p><strong>Strengths:</strong></p><ul>';
+                fb.strengths.forEach(function(s) { html += '<li>' + s + '</li>'; });
+                html += '</ul>';
+            }
+            if (fb.suggestions && fb.suggestions.length > 0) {
+                html += '<p><strong>Suggestions:</strong></p><ul>';
+                fb.suggestions.forEach(function(s) { html += '<li>' + s + '</li>'; });
+                html += '</ul>';
+            }
+        }
+        html += '<p class="mt-3"><strong>Skill Practiced:</strong> ' + (currentSkill || '-') + '</p>';
+        html += '<p><strong>Total Questions:</strong> ' + (data.total_questions || 0) + '</p>';
+        $('#finalResultsContent').html(html);
+        $('#resultsSection').show();
+    }
+
+    // Cleanup on page unload
+    $(window).on('beforeunload', function() {
+        if (eventSource) {
+            eventSource.close();
+        }
+    });
+});
+</script>
+</body>
+</html>
