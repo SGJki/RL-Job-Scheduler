@@ -1,6 +1,6 @@
 # Master-Worker 弹性恢复修复文档
 
-**修复日期：** 2026-04-03
+**修复日期：** 2026-04-03 / 2026-04-11
 **影响范围：** Worker 重连机制、Master 宕机恢复、任务状态一致性
 **状态：** 部分完成（见下方说明）
 
@@ -9,12 +9,12 @@
 | 模块 | 状态 | 说明 |
 |------|------|------|
 | Part 1: Worker 重连指数退避 | ✅ 已实施 | 1秒稳定期连接确认机制已加 |
-| Part 1: 连接稳定确认 | ⚠️ **待继续** | `isSuccess() = true` 后等待 1s 的修复在测试中未见效，Worker 重连仍持续以 60s 间隔重试，根因未完全定位 |
+| Part 1: Worker 重连始终失败（Netty Handler 复用） | ✅ 已修复 | 根因是 Worker 重连时复用同一个非 `@Sharable` 的 `WorkerHandler` 实例，导致第 2 次及之后的连接在 pipeline 初始化阶段直接失败 |
 | Part 2: 任务所有权立即持久化 | ✅ 已解决 | 僵尸任务（RUNNING 永久悬停）问题已解决 |
 | Part 3: Master 重启恢复逻辑增强 | ✅ 已解决 | 三段式恢复 + 心跳处理器通知丢失检测已生效 |
 | Part 4: Master 启动状态重建 | ✅ 已解决 | `@PostConstruct` 启动时重建已生效 |
 
-> ⚠️ **未完成项：** Worker 重连机制在 `isSuccess() = true` 后等待 1 秒稳定的修复仍无法解决问题。后续需要进一步排查：closeFuture 是否在 1 秒稳定期内已触发？`isReconnecting` 守卫是否有效？建议在 connect 成功后打印更细粒度的时序日志（TCP 握手完成时刻、1秒定时器触发时刻、closeFuture 触发时刻）以定位真实时序。
+> ✅ **结论更新（2026-04-11）：** “1 秒稳定期仍无效”的根因并非 closeFuture 时序，而是 Worker 重连时复用同一个非 `@Sharable` handler 导致连接初始化失败；见本文第十节 Bug Fix Log。
 
 ---
 
@@ -659,3 +659,80 @@ void testNoThunderingHerdOnMasterRestart() {
 - [ ] 心跳处理器检测 taskOwnerKey 匹配性
 - [ ] 编译通过（`./mvnw compile`）
 - [ ] 测试通过（`./mvnw test`）
+
+---
+
+## 十、Bug Fix Log（2026-04-11：Worker 重连始终失败）
+
+### 10.1 问题现象
+
+1. **master 必须先启动**：若 worker 先启动，后续即便 master 启动，worker 仍无法连接成功。
+2. **master 宕机恢复后 worker 重连无效**：worker 侧日志显示持续重试，但始终无法稳定建立连接。
+
+### 10.2 已做过的尝试（为何一开始误判）
+
+1. **假设 1：Master 启动期应用层未就绪**
+   - 现象上表现为：TCP 握手成功，但随后立刻被关闭/重连，容易联想到 “端口已监听但业务未 ready”。
+   - 对应尝试：在 Worker `connect()` 成功后增加“1 秒稳定期确认”，避免过早认定连接可用。
+2. **假设 2：惊群效应导致 Master 压力过大**
+   - 对应尝试：指数退避 + 抖动（已实施）。
+
+上述两类尝试都合理，但这个 bug 的真实失败点发生得更早：**连接 pipeline 初始化阶段**，因此“稳定期确认”不会真正生效。
+
+### 10.3 定位过程与关键证据
+
+为了快速验证“worker 先启动 / master 后启动”的场景，采用方式 A：
+
+1. **不启动 master**，直接启动 worker（触发重连循环）。
+2. 观察第 2 次及之后的重连日志，出现关键异常：
+
+```text
+io.netty.channel.ChannelPipelineException:
+  org.sgj.rljobscheduler.worker.netty.WorkerHandler is not a @Sharable handler,
+  so can't be added or removed multiple times.
+```
+
+该异常由 Netty 在初始化新 Channel 的 pipeline 时抛出（`checkMultiplicity`），并会导致连接被关闭，外层表现为 “connect 失败不断重试”。
+
+### 10.4 根因分析（为什么会有 bug）
+
+Worker 端在 `WorkerAgent.start()` 时只创建了 **一个** `WorkerHandler` 实例，然后每次 `connect()`（包括重连）都会创建 **新的 Channel**，并把同一个 `WorkerHandler` 再次 `addLast` 到新 Channel 的 pipeline。
+
+- Netty 规则：**同一个 handler 实例如果不是 `@Sharable`，不能被添加到多个 pipeline**。
+- `WorkerHandler` 不是 `@Sharable`，且包含任务状态字段（`currentTaskId / lastTaskId / attempt`），因此复用不仅会触发 Netty 的 multiplicity 保护，也会带来潜在的状态串扰风险。
+
+结果就是：**第 1 次连接可能成功（或失败），但第 2 次及之后的连接在 pipeline 初始化时必然失败**，从而表现为“所有重连尝试都无效”。
+
+### 10.5 修复方案（推荐方案落地）
+
+修复目标：每次重连都能创建一条“干净的 pipeline”，同时保留 worker 必要的业务状态。
+
+1. **每个 Channel 新建一个 `WorkerHandler`**
+   - 在 `ChannelInitializer.initChannel` 中 `new WorkerHandler(...)`，避免 handler 实例复用。
+2. **抽离跨连接共享状态 `WorkerState`**
+   - 将 `currentTaskId / lastTaskId / currentAttempt` 从 handler 内移到 `WorkerState`，由：
+     - `WorkerAgent` 的心跳/续租定时器读取
+     - 每次新建的 `WorkerHandler` 写入
+   - 这样即使发生重连/换 Channel，worker 的任务状态仍能持续保存并参与续租与心跳上报。
+3. **补齐连接失败根因日志**
+   - `future.isSuccess() == false` 时输出 `future.cause()`，避免以后再次误判为“纯 TCP 失败”。
+
+### 10.6 回归测试（锁住 Netty 复用坑）
+
+新增测试覆盖两条关键约束：
+
+1. **复用同一个非 `@Sharable` handler 实例到两个 Channel 必然抛异常**
+2. **每个 Channel 新建 handler（即便共享同一个 WorkerState）不会抛异常**
+
+这确保未来重构重连逻辑时，不会再次把 handler 复用引入回来。
+
+### 10.7 修复后对业务逻辑的影响评估
+
+1. **Worker 状态能否保存**
+   - 能保存：任务状态从 handler 内移到 `WorkerState`，与连接生命周期解耦；重连换 Channel 不会丢状态。
+2. **任务执行是否受影响**
+   - 不受影响：任务接收/启动 Python/日志推送/状态上报的业务逻辑未改变，仍由 `WorkerHandler` 处理。
+3. **心跳与 Redis 续租是否受影响**
+   - 更稳定：心跳/续租读取的是 `WorkerState`，不再依赖某一个 handler 实例是否还在使用中。
+4. **master 宕机恢复后 worker 是否能重连**
+   - 能：消除了 pipeline 初始化阶段的硬失败点，重连会真正进入“连接成功→稳定期→心跳恢复”的路径。
