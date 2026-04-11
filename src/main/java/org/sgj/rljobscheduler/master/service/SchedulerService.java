@@ -1,10 +1,12 @@
 package org.sgj.rljobscheduler.master.service;
 
 import io.netty.channel.Channel;
+import jakarta.annotation.PostConstruct;
 import org.sgj.rljobscheduler.common.netty.MessageHeader;
 import org.sgj.rljobscheduler.common.netty.MessageType;
 import org.sgj.rljobscheduler.common.netty.NettyMessage;
 import org.sgj.rljobscheduler.common.proto.ExecuteTaskRequest;
+import org.sgj.rljobscheduler.master.annotation.Loggable;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.netty.ChannelManager;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
@@ -57,12 +59,60 @@ public class SchedulerService {
     private String queueSetKey;
 
     /**
+     * Master 启动时，从 Redis 重建任务状态
+     * 扫描所有 worker:*:task key，恢复 RunningTaskRecovery 无法处理的边界情况
+     */
+    @PostConstruct
+    @Loggable(level = Loggable.LogLevel.INFO, logExecutionTime = true)
+    public void reconstructWorkerTasksFromRedis() {
+        LOG.info(">>> [SchedulerService] 开始从 Redis 重建 Worker 任务状态...");
+        try {
+            Set<String> workerTaskKeys = redisTemplate.keys("worker:*:task");
+            if (workerTaskKeys == null || workerTaskKeys.isEmpty()) {
+                LOG.info(">>> [SchedulerService] 无活跃 Worker 任务，跳过重建");
+                return;
+            }
+
+            for (String workerTaskKey : workerTaskKeys) {
+                // worker:{workerId}:task
+                String[] parts = workerTaskKey.split(":");
+                if (parts.length < 3) {
+                    continue;
+                }
+                String workerId = parts[1];
+                String taskId = redisTemplate.opsForValue().get(workerTaskKey);
+                if (taskId == null || taskId.isBlank()) {
+                    continue;
+                }
+
+                // 检查 task:{taskId}:workerId 是否存在（调度时 Master 写入）
+                String ownerKey = taskWorkerKey(taskId);
+                String ownerWorkerId = redisTemplate.opsForValue().get(ownerKey);
+                if (ownerWorkerId == null || !ownerWorkerId.equals(workerId)) {
+                    // taskOwnerKey 不存在或指向不同 Worker → 调度被中断
+                    TrainingTask task = taskMapper.selectById(taskId);
+                    if (task != null && "RUNNING".equals(task.getStatus())) {
+                        task.setStatus("PENDING");
+                        taskMapper.updateById(task);
+                        enqueueIfEnabled(taskId);
+                        LOG.info(">>> [Recovery] 启动重建：任务 [{}] 调度中断，标记为 PENDING", taskId);
+                    }
+                }
+            }
+            LOG.info(">>> [SchedulerService] Worker 任务状态重建完成");
+        } catch (Exception e) {
+            LOG.error(">>> [SchedulerService] 重建 Worker 任务状态失败: {}", e.getMessage());
+        }
+    }
+
+    /**
      * 抢占并调度任务到合适的 Worker
      */
     public boolean scheduleTask(TrainingTask task) {
         return scheduleTask(task, null);
     }
 
+    @Loggable(level = Loggable.LogLevel.INFO, logParams = true, logExecutionTime = true)
     public boolean scheduleTask(TrainingTask task, String traceId) {
         try {
             String effectiveTraceId = (traceId == null || traceId.isBlank()) ? "unknown" : traceId;
@@ -98,6 +148,7 @@ public class SchedulerService {
         }
     }
 
+    @Loggable(level = Loggable.LogLevel.INFO, logParams = true, logExecutionTime = true)
     public boolean tryDispatchQueuedTaskToWorker(String workerId) {
         if (!queueEnabled) {
             return false;

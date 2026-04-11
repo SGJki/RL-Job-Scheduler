@@ -4,10 +4,14 @@ import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.sync.RedisCommands;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 
 public class RedisLeaseManager {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RedisLeaseManager.class);
 
     private final String workerId;
     private final RedisClient client;
@@ -53,6 +57,26 @@ public class RedisLeaseManager {
                 commands.del(taskOwnerKey(lastTaskId));
             }
         } catch (Exception ignored) {
+        }
+    }
+
+    public void persistTaskStart(String taskId) {
+        try {
+            commands.setex(taskKey(), taskTtlSeconds, taskId);
+            commands.setex(taskOwnerKey(taskId), taskTtlSeconds, workerId);
+        } catch (Exception e) {
+            LOG.warn(">>> [LeaseManager] persistTaskStart failed for taskId={}: {}", taskId, e.getMessage());
+        }
+    }
+
+    public void clearTask(String taskId) {
+        try {
+            commands.del(taskKey());
+            if (taskId != null && !taskId.isBlank()) {
+                commands.del(taskOwnerKey(taskId));
+            }
+        } catch (Exception e) {
+            LOG.warn(">>> [LeaseManager] clearTask failed for taskId={}: {}", taskId, e.getMessage());
         }
     }
 

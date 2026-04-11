@@ -4,6 +4,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import org.sgj.rljobscheduler.common.netty.*;
 import org.sgj.rljobscheduler.common.proto.*;
+import org.sgj.rljobscheduler.worker.redis.RedisLeaseManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,24 +23,20 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
 
     private static final Logger LOG = LoggerFactory.getLogger(WorkerHandler.class);
     private final String workerId;
-    private volatile String currentTaskId = "";
-    private volatile String lastTaskId = "";
-    private volatile int currentAttempt = 0;
+    private final WorkerState workerState;
+    private RedisLeaseManager leaseManager;
 
-    public WorkerHandler(String workerId) {
+    public WorkerHandler(String workerId, WorkerState workerState) {
         this.workerId = workerId;
+        this.workerState = workerState;
     }
 
-    public String getCurrentTaskId() {
-        return currentTaskId;
+    public void setLeaseManager(RedisLeaseManager leaseManager) {
+        this.leaseManager = leaseManager;
     }
 
-    public String getLastTaskId() {
-        return lastTaskId;
-    }
-
-    public int getCurrentAttempt() {
-        return currentAttempt;
+    public WorkerState getWorkerState() {
+        return workerState;
     }
 
     @Override
@@ -55,9 +52,14 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     private void handleExecuteTask(ChannelHandlerContext ctx, ExecuteTaskRequest req) {
         String taskId = req.getTaskId();
         LOG.info(">>> 收到训练任务: taskId={}, algo={}", taskId, req.getAlgorithm());
-        this.lastTaskId = taskId;
-        this.currentTaskId = taskId;
-        this.currentAttempt = req.getAttempt();
+        workerState.setLastTaskId(taskId);
+        workerState.setCurrentTaskId(taskId);
+        workerState.setCurrentAttempt(req.getAttempt());
+
+        // 立即持久化任务所有权到 Redis（在启动 Python 线程之前）
+        if (leaseManager != null) {
+            leaseManager.persistTaskStart(taskId);
+        }
 
         // 1. 立即返回响应 (确认收到)
         ExecuteTaskResponse resp = ExecuteTaskResponse.newBuilder()
@@ -65,7 +67,7 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
                 .setAccepted(true)
                 .setMessage("Task received by worker " + workerId)
                 .build();
-        
+
         NettyMessage nettyResp = new NettyMessage();
         nettyResp.setHeader(new MessageHeader(0, MessageType.EXECUTE_TASK_RESPONSE.getCode()));
         nettyResp.setBody(resp);
@@ -124,17 +126,17 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
             LOG.info(">>> [Worker] Python 进程结束, taskId={}, exitCode={}", taskId, exitCode);
             reportStatus(ctx, taskId, exitCode == 0 ? "COMPLETED" : "FAILED", exitCode == 0 ? "" : "Process exited with code " + exitCode);
             
-            if (taskId.equals(this.currentTaskId)) {
-                this.currentTaskId = "";
-                this.currentAttempt = 0;
+            if (taskId.equals(workerState.getCurrentTaskId())) {
+                workerState.setCurrentTaskId("");
+                workerState.setCurrentAttempt(0);
             }
 
         } catch (Exception e) {
             LOG.error(">>> [Worker] 执行 Python 任务失败: {}", taskId, e);
             reportStatus(ctx, taskId, "FAILED", e.getMessage());
-            if (taskId.equals(this.currentTaskId)) {
-                this.currentTaskId = "";
-                this.currentAttempt = 0;
+            if (taskId.equals(workerState.getCurrentTaskId())) {
+                workerState.setCurrentTaskId("");
+                workerState.setCurrentAttempt(0);
             }
         }
     }
@@ -153,14 +155,18 @@ public class WorkerHandler extends SimpleChannelInboundHandler<NettyMessage> {
     }
 
     private void reportStatus(ChannelHandlerContext ctx, String taskId, String status, String errorMsg) {
-        int attempt = taskId != null && taskId.equals(this.currentTaskId) ? this.currentAttempt : 0;
+        // 立即清除 Redis 中的任务所有权
+        if (leaseManager != null) {
+            leaseManager.clearTask(taskId);
+        }
+        int attempt = taskId != null && taskId.equals(workerState.getCurrentTaskId()) ? workerState.getCurrentAttempt() : 0;
         TaskStatusReport report = TaskStatusReport.newBuilder()
                 .setTaskId(taskId)
                 .setStatus(status)
                 .setErrorMessage(errorMsg != null ? errorMsg : "")
                 .setAttempt(attempt)
                 .build();
-        
+
         NettyMessage msg = new NettyMessage();
         msg.setHeader(new MessageHeader(0, MessageType.TASK_STATUS_REPORT.getCode()));
         msg.setBody(report);

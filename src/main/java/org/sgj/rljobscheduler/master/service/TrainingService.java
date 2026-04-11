@@ -1,9 +1,12 @@
 package org.sgj.rljobscheduler.master.service;
 
+import org.sgj.rljobscheduler.master.annotation.Loggable;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.dto.TrainingRequest;
 import org.sgj.rljobscheduler.master.dto.TrainingResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
@@ -22,6 +25,8 @@ import java.util.concurrent.CompletableFuture;
 @Service
 public class TrainingService {
 
+    private static final Logger LOG = LoggerFactory.getLogger(TrainingService.class);
+
     @Autowired
     private TrainingTaskMapper taskMapper;
 
@@ -34,6 +39,7 @@ public class TrainingService {
     /**
      * 启动训练任务 (分布式调度版本)
      */
+    @Loggable(level = Loggable.LogLevel.INFO, logParams = true, logExecutionTime = true)
     public TrainingResult startTraining(TrainingRequest request, Long userId, String traceId) {
         // 1. 生成任务 ID 并保存到数据库
         String taskId = UUID.randomUUID().toString().substring(0, 8);
@@ -58,14 +64,14 @@ public class TrainingService {
             // 更新数据库状态为 RUNNING
             task.setStatus("RUNNING");
             int rows = taskMapper.updateById(task);
-            System.out.println(">>> [TrainingService] 任务已调度并更新为 RUNNING: " + taskId + ", rows=" + rows);
-            
+            LOG.info(">>> [TrainingService] 任务已调度并更新为 RUNNING: {}, rows={}", taskId, rows);
+
             // 推送 WebSocket 状态更新
             messagingTemplate.convertAndSend("/topic/tasks", task);
-            
+
             return new TrainingResult(taskId, "RUNNING", 0, "Task scheduled to worker...","None");
         } else {
-            System.out.println(">>> [TrainingService] 任务调度失败，保持 PENDING: " + taskId);
+            LOG.warn(">>> [TrainingService] 任务调度失败，保持 PENDING: {}", taskId);
             return new TrainingResult(taskId, "PENDING", 0, "No available worker, task queued...","None");
         }
     }
