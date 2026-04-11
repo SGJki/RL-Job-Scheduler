@@ -8,6 +8,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import org.sgj.rljobscheduler.common.netty.*;
 import org.sgj.rljobscheduler.common.proto.*;
 import org.sgj.rljobscheduler.worker.netty.WorkerHandler;
+import org.sgj.rljobscheduler.worker.netty.WorkerState;
 import org.sgj.rljobscheduler.worker.redis.RedisLeaseManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +36,7 @@ public class WorkerAgent {
 
     private EventLoopGroup group;
     private Channel channel;
-    private WorkerHandler workerHandler;
+    private WorkerState workerState;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private volatile boolean scheduledStarted = false;
     private RedisLeaseManager leaseManager;
@@ -50,9 +51,8 @@ public class WorkerAgent {
 
     public void start() {
         group = new NioEventLoopGroup();
-        workerHandler = new WorkerHandler(workerId);
+        workerState = new WorkerState();
         leaseManager = new RedisLeaseManager(workerId);
-        workerHandler.setLeaseManager(leaseManager);
         try {
             Bootstrap b = new Bootstrap();
             b.group(group)
@@ -63,7 +63,9 @@ public class WorkerAgent {
                         public void initChannel(SocketChannel ch) {
                             ch.pipeline().addLast(new MessageDecoder());
                             ch.pipeline().addLast(new MessageEncoder());
-                            ch.pipeline().addLast(workerHandler);
+                            WorkerHandler handler = new WorkerHandler(workerId, workerState);
+                            handler.setLeaseManager(leaseManager);
+                            ch.pipeline().addLast(handler);
                         }
                     });
 
@@ -87,6 +89,10 @@ public class WorkerAgent {
         b.connect(masterHost, masterPort).addListener((ChannelFutureListener) future -> {
             if (!future.isSuccess()) {
                 LOG.warn(">>> TCP 连接失败，{}秒后重试...", currentReconnectDelay);
+                Throwable cause = future.cause();
+                if (cause != null) {
+                    LOG.warn(">>> TCP 连接失败原因: {}", cause.toString());
+                }
                 scheduleReconnect(b, 0);
                 return;
             }
@@ -162,8 +168,8 @@ public class WorkerAgent {
         scheduledStarted = true;
 
         scheduler.scheduleAtFixedRate(() -> {
-            String currentTaskId = workerHandler.getCurrentTaskId();
-            String lastTaskId = workerHandler.getLastTaskId();
+            String currentTaskId = workerState == null ? "" : workerState.getCurrentTaskId();
+            String lastTaskId = workerState == null ? "" : workerState.getLastTaskId();
             if (leaseManager != null) {
                 leaseManager.renew(currentTaskId, lastTaskId);
             }
