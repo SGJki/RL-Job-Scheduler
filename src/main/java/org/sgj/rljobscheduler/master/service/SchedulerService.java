@@ -18,6 +18,7 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -153,6 +154,67 @@ public class SchedulerService {
         }
     }
 
+    /**
+     * Called when we need to find ANY idle worker to take a queued task.
+     * Used as fallback when tryDispatchQueuedTaskToWorker returns false.
+     */
+    public void dispatchOneFromQueueToAnyIdleWorker() {
+        dispatchOneFromQueue();
+    }
+
+    /**
+     * Attempt to drain one task from the queue to any available idle worker.
+     * Called immediately after enqueue and when a Worker reports idle via heartbeat.
+     */
+    private void dispatchOneFromQueue() {
+        if (!queueEnabled) {
+            return;
+        }
+        Set<String> workerIds = workerRegistry.getActiveWorkerIds();
+        for (String workerId : workerIds) {
+            String taskId = redisTemplate.opsForList().leftPop(queueListKey);
+            if (taskId == null || taskId.isBlank()) {
+                // Queue empty
+                return;
+            }
+
+            // Verify task is still PENDING in DB
+            TrainingTask task = taskMapper.selectById(taskId);
+            if (task == null || !"PENDING".equals(task.getStatus())) {
+                redisTemplate.opsForSet().remove(queueSetKey, taskId);
+                continue;  // try next task
+            }
+
+            // Check if already assigned
+            String ownerKey = "task:" + taskId + ":workerId";
+            String ownerWorkerId = redisTemplate.opsForValue().get(ownerKey);
+            if (ownerWorkerId != null) {
+                redisTemplate.opsForSet().remove(queueSetKey, taskId);
+                continue;
+            }
+
+            if (tryPreemptWorker(workerId, taskId)) {
+                registerTaskOwner(workerId, taskId);
+                String traceId = redisTemplate.opsForValue().get(taskTraceKey(taskId));
+                if (traceId == null || traceId.isBlank()) {
+                    traceId = "unknown";
+                }
+                boolean dispatched = dispatchTask(workerId, task, traceId);
+                if (dispatched) {
+                    task.setStatus("RUNNING");
+                    taskMapper.updateById(task);
+                    redisTemplate.opsForSet().remove(queueSetKey, taskId);
+                    messagingTemplate.convertAndSend("/topic/tasks", task);
+                    return;  // Successfully dispatched one task
+                }
+                releaseTaskOwner(taskId);
+            }
+            // Worker busy or dispatch failed, re-enqueue at back
+            enqueueIfEnabled(taskId);
+            return;
+        }
+    }
+
     public void enqueueTask(String taskId) {
         enqueueIfEnabled(taskId);
     }
@@ -198,9 +260,13 @@ public class SchedulerService {
             return;
         }
         try {
+            // SET NX semantics: only add if not already present
             Long added = redisTemplate.opsForSet().add(queueSetKey, taskId);
             if (added != null && added > 0) {
                 redisTemplate.opsForList().rightPush(queueListKey, taskId);
+                LOG.info(">>> 任务 [{}] 入队，立即触发调度", taskId);
+                // Try dispatch to any idle worker immediately — don't wait for Reconciler
+                dispatchOneFromQueue();
             }
         } catch (Exception e) {
             LOG.error(">>> [SchedulerService] 入队失败: {}", e.getMessage());
