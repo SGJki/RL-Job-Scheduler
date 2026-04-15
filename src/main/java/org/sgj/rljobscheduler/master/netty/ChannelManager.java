@@ -29,14 +29,18 @@ public class ChannelManager {
     @PostConstruct
     public void startStaleChannelCleanup() {
         cleanupScheduler.scheduleAtFixedRate(() -> {
-            Iterator<Map.Entry<String, Channel>> it = workerChannels.entrySet().iterator();
-            while (it.hasNext()) {
-                Map.Entry<String, Channel> entry = it.next();
-                if (!entry.getValue().isActive()) {
-                    String workerId = entry.getKey();
-                    it.remove();
-                    LOG.warn(">>> ChannelManager: 清理失效 Channel [{}]", workerId);
+            try {
+                Iterator<Map.Entry<String, Channel>> it = workerChannels.entrySet().iterator();
+                while (it.hasNext()) {
+                    Map.Entry<String, Channel> entry = it.next();
+                    if (!entry.getValue().isActive()) {
+                        String workerId = entry.getKey();
+                        it.remove();
+                        LOG.warn(">>> ChannelManager: 清理失效 Channel [{}]", workerId);
+                    }
                 }
+            } catch (Exception e) {
+                LOG.error(">>> ChannelManager: 清理线程异常: {}", e.getMessage());
             }
         }, 30, 30, TimeUnit.SECONDS);
     }
@@ -47,14 +51,24 @@ public class ChannelManager {
     }
 
     public void register(String workerId, Channel channel) {
+        if (workerId == null || workerId.isBlank() || channel == null) {
+            return;
+        }
         workerChannels.put(workerId, channel);
     }
 
     public void unregister(String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            return;
+        }
         workerChannels.remove(workerId);
+        LOG.info(">>> ChannelManager: Worker [{}] 已移除", workerId);
     }
 
     public Channel getChannel(String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            return null;
+        }
         return workerChannels.get(workerId);
     }
 
