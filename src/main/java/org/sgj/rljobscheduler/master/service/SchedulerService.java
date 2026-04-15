@@ -254,9 +254,12 @@ public class SchedulerService {
             return null;
         }
 
-        // Build KEYS list: worker:{id}:hb and worker:{id}:task pairs
+        // CRITICAL: use ordered List so index mapping is stable
+        List<String> workerIdList = new ArrayList<>(workerIds);
+
+        // Build KEYS list in the SAME order as workerIdList
         List<String> keys = new java.util.ArrayList<>();
-        for (String workerId : workerIds) {
+        for (String workerId : workerIdList) {
             keys.add("worker:" + workerId + ":hb");    // KEYS[2*i]
             keys.add("worker:" + workerId + ":task");   // KEYS[2*i+1]
         }
@@ -282,10 +285,9 @@ public class SchedulerService {
             return null;
         }
 
-        // Convert 1-based index back to workerId
-        String[] workerArray = workerIds.toArray(new String[0]);
+        // Use the SAME workerIdList for index → workerId conversion
         int idx = (int) (result - 1);
-        return idx >= 0 && idx < workerArray.length ? workerArray[idx] : null;
+        return idx >= 0 && idx < workerIdList.size() ? workerIdList.get(idx) : null;
     }
 
     private boolean dispatchTask(String workerId, TrainingTask task, String traceId) {
