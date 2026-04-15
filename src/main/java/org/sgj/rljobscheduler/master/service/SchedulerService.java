@@ -201,11 +201,18 @@ public class SchedulerService {
                 }
                 boolean dispatched = dispatchTask(workerId, task, traceId);
                 if (dispatched) {
-                    task.setStatus("RUNNING");
-                    taskMapper.updateById(task);
-                    redisTemplate.opsForSet().remove(queueSetKey, taskId);
-                    messagingTemplate.convertAndSend("/topic/tasks", task);
-                    return;  // Successfully dispatched one task
+                    try {
+                        task.setStatus("RUNNING");
+                        taskMapper.updateById(task);
+                        redisTemplate.opsForSet().remove(queueSetKey, taskId);
+                        messagingTemplate.convertAndSend("/topic/tasks", task);
+                        return;  // Successfully dispatched one task
+                    } catch (Exception e) {
+                        LOG.error(">>> [SchedulerService] 任务 [{}] 状态更新失败: {}", taskId, e.getMessage());
+                        releaseTaskOwner(taskId);
+                        enqueueIfEnabled(taskId);
+                        return;
+                    }
                 }
                 releaseTaskOwner(taskId);
             }
