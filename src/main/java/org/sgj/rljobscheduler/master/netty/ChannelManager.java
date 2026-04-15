@@ -20,15 +20,24 @@ public class ChannelManager {
     private final Map<String, Channel> workerChannels = new ConcurrentHashMap<>();
 
     public void register(String workerId, Channel channel) {
+        if (workerId == null || workerId.isBlank() || channel == null) {
+            return;
+        }
         workerChannels.put(workerId, channel);
     }
 
     public void unregister(String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            return;
+        }
         workerChannels.remove(workerId);
         LOG.info(">>> ChannelManager: Worker [{}] 已移除", workerId);
     }
 
     public Channel getChannel(String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            return null;
+        }
         return workerChannels.get(workerId);
     }
 

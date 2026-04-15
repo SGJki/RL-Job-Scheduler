@@ -62,10 +62,13 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
         String workerId = ctx.channel().attr(WORKER_ID_KEY).get();
-        if (workerId != null) {
-            channelManager.unregister(workerId);
-            workerRegistry.unregister(workerId);
+        if (workerId == null) {
+            LOG.info(">>> Worker 连接断开 (未注册ID): {}", ctx.channel().remoteAddress());
+            ctx.close();
+            return;
         }
+        channelManager.unregister(workerId);
+        workerRegistry.unregister(workerId);
         LOG.info(">>> Worker 连接断开: {}", ctx.channel().remoteAddress());
     }
 
@@ -166,12 +169,14 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
         // 如果任务结束，清理 Redis 中的 TaskIDKey
         if ("COMPLETED".equals(status) || "FAILED".equals(status)) {
             String workerId = ctx.channel().attr(WORKER_ID_KEY).get();
-            if (workerId != null) {
-                String taskKey = "worker:" + workerId + ":task";
-                redisTemplate.delete(taskKey);
-                LOG.info(">>> 任务结束，已释放 Worker [{}]", workerId);
-                schedulerService.tryDispatchQueuedTaskToWorker(workerId);
+            if (workerId == null) {
+                LOG.warn(">>> 收到状态报告但无法获取 workerId");
+                return;
             }
+            String taskKey = "worker:" + workerId + ":task";
+            redisTemplate.delete(taskKey);
+            LOG.info(">>> 任务结束，已释放 Worker [{}]", workerId);
+            schedulerService.tryDispatchQueuedTaskToWorker(workerId);
             if (attemptMatched) {
                 schedulerService.releaseTaskOwner(taskId);
             }

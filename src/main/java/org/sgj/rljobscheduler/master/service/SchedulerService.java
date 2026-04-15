@@ -102,6 +102,9 @@ public class SchedulerService {
     }
 
     public boolean tryDispatchQueuedTaskToWorker(String workerId) {
+        if (workerId == null || workerId.isBlank()) {
+            return false;
+        }
         if (!queueEnabled) {
             return false;
         }
