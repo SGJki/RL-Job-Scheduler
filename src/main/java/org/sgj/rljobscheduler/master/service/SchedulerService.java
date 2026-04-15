@@ -19,6 +19,7 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -80,14 +81,11 @@ public class SchedulerService {
                 return false;
             }
 
-            for (String workerId : workerIds) {
-                
-                // 2. 尝试抢占 (Lua 脚本保证原子性)
-                if (tryPreemptWorker(workerId, task.getId())) {
-                    registerTaskOwner(workerId, task.getId());
-                    // 3. 抢占成功，通过 Netty 下发任务
-                    return dispatchTask(workerId, task, effectiveTraceId);
-                }
+            String winnerId = tryPreemptAnyWorker(task.getId());
+            if (winnerId != null) {
+                registerTaskOwner(winnerId, task.getId());
+                // 抢占成功，通过 Netty 下发任务
+                return dispatchTask(winnerId, task, effectiveTraceId);
             }
 
             LOG.warn(">>> 所有在线 Worker 均在运行中，任务进入等待队列: {}", task.getId());
@@ -240,6 +238,54 @@ public class SchedulerService {
         );
         
         return result != null && result == 1;
+    }
+
+    /**
+     * Batch preempt — one Lua script checks all workers at once.
+     * Returns the first workerId that successfully preempts, or null if all busy.
+     * Redis: SMEMBERS → one Lua call → result
+     */
+    public String tryPreemptAnyWorker(String taskId) {
+        if (taskId == null || taskId.isBlank()) {
+            return null;
+        }
+        Set<String> workerIds = workerRegistry.getActiveWorkerIds();
+        if (workerIds == null || workerIds.isEmpty()) {
+            return null;
+        }
+
+        // Build KEYS list: worker:{id}:hb and worker:{id}:task pairs
+        List<String> keys = new java.util.ArrayList<>();
+        for (String workerId : workerIds) {
+            keys.add("worker:" + workerId + ":hb");    // KEYS[2*i]
+            keys.add("worker:" + workerId + ":task");   // KEYS[2*i+1]
+        }
+
+        // Single Lua script: iterate all pairs, return 1-based index of first winner
+        String script =
+            "local taskId = ARGV[1]\n" +
+            "local n = #KEYS / 2\n" +
+            "for i = 0, n - 1 do\n" +
+            "  local hbKey = KEYS[2*i+1]\n" +
+            "  local taskKey = KEYS[2*i+2]\n" +
+            "  if redis.call('get', hbKey) == 'alive' and redis.call('exists', taskKey) == 0 then\n" +
+            "    redis.call('set', taskKey, taskId, 'EX', 120)\n" +
+            "    return (i + 1)\n" +
+            "  end\n" +
+            "end\n" +
+            "return 0\n";
+
+        DefaultRedisScript<Long> redisScript = new DefaultRedisScript<>(script, Long.class);
+        Long result = redisTemplate.execute(redisScript, keys, taskId);
+
+        if (result == null || result == 0) {
+            return null;
+        }
+
+        // Convert 1-based index back to workerId
+        String[] workerArray = workerIds.toArray(new String[0]);
+        int idx = (int) (result - 1);
+        return idx >= 0 && idx < workerArray.length ? workerArray[idx] : null;
     }
 
     private boolean dispatchTask(String workerId, TrainingTask task, String traceId) {
