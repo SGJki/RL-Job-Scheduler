@@ -11,6 +11,7 @@ import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
 import org.sgj.rljobscheduler.master.service.SchedulerService;
 import org.sgj.rljobscheduler.master.service.LogManager;
+import org.sgj.rljobscheduler.master.service.RedisWorkerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,6 +51,9 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
     @Autowired
     private SchedulerService schedulerService;
 
+    @Autowired
+    private RedisWorkerRegistry workerRegistry;
+
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         LOG.info(">>> 有新的 Worker 连接: {}", ctx.channel().remoteAddress());
@@ -57,9 +61,15 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        // TODO: 从 ChannelManager 中移除，但这需要知道 workerId
-        // 可以在处理心跳时绑定属性到 Channel
-        LOG.info(">>> Worker 连接断开: {}", ctx.channel().remoteAddress());
+        String workerId = ctx.channel().attr(WORKER_ID_KEY).get();
+        if (workerId == null) {
+            LOG.info(">>> Worker 连接断开 (未注册ID): {}", ctx.channel().remoteAddress());
+            ctx.close();
+            return;
+        }
+        channelManager.unregister(workerId);
+        workerRegistry.unregister(workerId);
+        LOG.info(">>> Worker [{}] 连接断开，已注销", workerId);
     }
 
     @Override
@@ -185,7 +195,7 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
         int currentAttempt = schedulerService.getCurrentAttempt(taskId);
         boolean attemptMatched = reportAttempt <= 0 || currentAttempt <= 0 || reportAttempt == currentAttempt;
         LOG.info(">>> 收到任务状态报告: taskId={}, status={}, attempt={}, currentAttempt={}", taskId, status, reportAttempt, currentAttempt);
-        
+
         // 更新数据库
         if (attemptMatched) {
             TrainingTask task = taskMapper.selectById(taskId);
@@ -200,7 +210,7 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
                 }
                 taskMapper.updateById(task);
                 LOG.info(">>> 任务数据库状态已更新: taskId={}, status={}", taskId, status);
-                
+
                 // 推送 WebSocket 状态更新到前端
                 messagingTemplate.convertAndSend("/topic/tasks", task);
             } else {

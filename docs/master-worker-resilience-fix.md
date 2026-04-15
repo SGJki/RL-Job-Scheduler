@@ -6,17 +6,17 @@
 
 ## 修复进度
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| Part 1: Worker 重连指数退避 | ✅ 已实施 | 1秒稳定期连接确认机制已加 |
+| 模块                                      | 状态    | 说明                                                                                      |
+| --------------------------------------- | ----- | --------------------------------------------------------------------------------------- |
+| Part 1: Worker 重连指数退避                   | ✅ 已实施 | 1秒稳定期连接确认机制已加                                                                           |
 | Part 1: Worker 重连始终失败（Netty Handler 复用） | ✅ 已修复 | 根因是 Worker 重连时复用同一个非 `@Sharable` 的 `WorkerHandler` 实例，导致第 2 次及之后的连接在 pipeline 初始化阶段直接失败 |
-| Part 2: 任务所有权立即持久化 | ✅ 已解决 | 僵尸任务（RUNNING 永久悬停）问题已解决 |
-| Part 3: Master 重启恢复逻辑增强 | ✅ 已解决 | 三段式恢复 + 心跳处理器通知丢失检测已生效 |
-| Part 4: Master 启动状态重建 | ✅ 已解决 | `@PostConstruct` 启动时重建已生效 |
+| Part 2: 任务所有权立即持久化                      | ✅ 已解决 | 僵尸任务（RUNNING 永久悬停）问题已解决                                                                 |
+| Part 3: Master 重启恢复逻辑增强                 | ✅ 已解决 | 三段式恢复 + 心跳处理器通知丢失检测已生效                                                                  |
+| Part 4: Master 启动状态重建                   | ✅ 已解决 | `@PostConstruct` 启动时重建已生效                                                               |
 
 > ✅ **结论更新（2026-04-11）：** “1 秒稳定期仍无效”的根因并非 closeFuture 时序，而是 Worker 重连时复用同一个非 `@Sharable` handler 导致连接初始化失败；见本文第十节 Bug Fix Log。
 
----
+***
 
 ## 一、问题描述
 
@@ -31,14 +31,14 @@
 
 ### 1.2 影响分析
 
-| 影响项 | 严重程度 | 说明 |
-|--------|----------|------|
-| Worker 重连失效 | 高 | TCP 连接成功但应用层状态未建立 |
-| 任务状态不一致 | 高 | DB=Running, Redis=无对应 Worker |
-| 资源泄漏 | 中 | Redis key 永不过期，Worker 无法接新任务 |
-| 恢复时间长 | 中 | 惊群效应导致 Master 启动压力增大 |
+| 影响项         | 严重程度 | 说明                           |
+| ----------- | ---- | ---------------------------- |
+| Worker 重连失效 | 高    | TCP 连接成功但应用层状态未建立            |
+| 任务状态不一致     | 高    | DB=Running, Redis=无对应 Worker |
+| 资源泄漏        | 中    | Redis key 永不过期，Worker 无法接新任务 |
+| 恢复时间长       | 中    | 惊群效应导致 Master 启动压力增大         |
 
----
+***
 
 ## 二、根因分析
 
@@ -54,6 +54,7 @@ channel.closeFuture().addListener((ChannelFutureListener) closeFuture -> {
 ```
 
 **问题：**
+
 - 固定 5 秒延迟，多个 Worker 同时重连产生惊群效应
 - 无重连状态跟踪，可能出现并发重连
 - 无指数退避，Master 完全启动前反复失败
@@ -89,6 +90,7 @@ if ((hbAlive != null && hbAlive) && (taskKeyExists != null && taskKeyExists)) {
 ```
 
 **盲点：**
+
 - `taskOwnerKey` 存在但 `taskKey` 不存在 → 无法判断（已完成？中断？）
 - `taskOwnerKey` 不存在 → 原逻辑直接跳过（实际是调度中断，应重置）
 - Master 重启后不知道 Worker 的 `currentTaskId` 是否是重启前的残留
@@ -104,7 +106,7 @@ Master: 看到空闲 Worker，尝试分配新任务
 问题: 原任务可能分配给其他 Worker，而原任务仍在 Redis 中有记录
 ```
 
----
+***
 
 ## 三、诊断过程
 
@@ -117,11 +119,11 @@ Master: 看到空闲 Worker，尝试分配新任务
 
 ### 3.2 Redis Key 分析
 
-| Key 格式 | TTL | 创建时机 | 说明 |
-|----------|-----|----------|------|
-| `worker:{workerId}:hb` | 30s | 心跳时 | Worker 存活标志 |
+| Key 格式                   | TTL  | 创建时机                  | 说明          |
+| ------------------------ | ---- | --------------------- | ----------- |
+| `worker:{workerId}:hb`   | 30s  | 心跳时                   | Worker 存活标志 |
 | `worker:{workerId}:task` | 120s | 下次心跳时（原来）→ 任务接收时（修复后） | Worker 当前任务 |
-| `task:{taskId}:workerId` | 120s | Master 调度时 | 任务所属 Worker |
+| `task:{taskId}:workerId` | 120s | Master 调度时            | 任务所属 Worker |
 
 ### 3.3 关键时间点分析
 
@@ -136,7 +138,7 @@ Gap [T0, T0+10s]: taskOwnerKey 存在，workerTaskKey 不存在
 → Gap 缩小到 ~0ms（原子性）
 ```
 
----
+***
 
 ## 四、执行方案
 
@@ -150,13 +152,13 @@ Gap [T0, T0+10s]: taskOwnerKey 存在，workerTaskKey 不存在
 
 ### 4.2 方案对比
 
-| 方案 | 优点 | 缺点 |
-|------|------|------|
-| A: 只修 Worker 重连 | 简单 | 任务状态不一致问题未解决 |
-| B: 只修恢复逻辑 | 无需改 Worker | 无法处理 workerTaskKey 缺失的边界情况 |
-| **C: 两者都修（采用）** | 彻底解决重连和恢复问题 | 改动量较大 |
+| 方案              | 优点          | 缺点                         |
+| --------------- | ----------- | -------------------------- |
+| A: 只修 Worker 重连 | 简单          | 任务状态不一致问题未解决               |
+| B: 只修恢复逻辑       | 无需改 Worker  | 无法处理 workerTaskKey 缺失的边界情况 |
+| **C: 两者都修（采用）** | 彻底解决重连和恢复问题 | 改动量较大                      |
 
----
+***
 
 ## 五、实际修改逻辑
 
@@ -279,7 +281,7 @@ private void connect(Bootstrap b) {
 
 1. **1 秒稳定期**：`isSuccess()` 后等待 1 秒，让 Master 有充足时间完成 Spring 启动
 2. **主动检测失效**：稳定期内如果 `isActive() = false`，立即重连而不是等到 `closeFuture`
-3. **`isReconnecting` 守卫**：closeFuture 中检查 `isReconnecting` 标志，防止与 `scheduleReconnect` 双重触发
+3. **`isReconnecting`** **守卫**：closeFuture 中检查 `isReconnecting` 标志，防止与 `scheduleReconnect` 双重触发
 
 ### 5.2 Part 2: 任务所有权立即持久化（WorkerHandler + RedisLeaseManager）
 
@@ -332,7 +334,7 @@ public void clearTask(String taskId) {
 }
 ```
 
-**效果：时间差从 ~10 秒降低到 ~0 秒**
+**效果：时间差从 \~10 秒降低到 \~0 秒**
 
 ### 5.3 Part 3: Master 重启恢复增强（RunningTaskRecovery + MasterHandler）
 
@@ -430,20 +432,20 @@ public void reconstructWorkerTasksFromRedis() {
 }
 ```
 
----
+***
 
 ## 六、修改文件清单
 
-| 文件路径 | 修改类型 | 修改内容 |
-|----------|----------|----------|
-| `worker/WorkerAgent.java` | 修改 | 指数退避重连 + isReconnecting 状态跟踪 + **1秒稳定期连接确认** |
-| `worker/netty/WorkerHandler.java` | 修改 | 注入 LeaseManager，任务接收时立即持久化，报告时清除 |
-| `worker/redis/RedisLeaseManager.java` | 修改 | 新增 persistTaskStart() 和 clearTask() 方法 |
-| `master/service/RunningTaskRecovery.java` | 修改 | 三段式恢复逻辑（中断/存活/死亡） |
-| `master/netty/MasterHandler.java` | 修改 | 心跳中检测通知丢失，新增 checkAndFixStaleRunningTasks() |
-| `master/service/SchedulerService.java` | 修改 | 新增 @PostConstruct reconstructWorkerTasksFromRedis() |
+| 文件路径                                      | 修改类型 | 修改内容                                                |
+| ----------------------------------------- | ---- | --------------------------------------------------- |
+| `worker/WorkerAgent.java`                 | 修改   | 指数退避重连 + isReconnecting 状态跟踪 + **1秒稳定期连接确认**        |
+| `worker/netty/WorkerHandler.java`         | 修改   | 注入 LeaseManager，任务接收时立即持久化，报告时清除                    |
+| `worker/redis/RedisLeaseManager.java`     | 修改   | 新增 persistTaskStart() 和 clearTask() 方法              |
+| `master/service/RunningTaskRecovery.java` | 修改   | 三段式恢复逻辑（中断/存活/死亡）                                   |
+| `master/netty/MasterHandler.java`         | 修改   | 心跳中检测通知丢失，新增 checkAndFixStaleRunningTasks()         |
+| `master/service/SchedulerService.java`    | 修改   | 新增 @PostConstruct reconstructWorkerTasksFromRedis() |
 
----
+***
 
 ## 七、Redis 数据流（修复后）
 
@@ -484,7 +486,113 @@ Worker 重连
   → 不匹配 → 标记 COMPLETED（通知丢失）
 ```
 
----
+### 7.3 Worker-Master 交互图（正常执行）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as Master(SchedulerService/MasterHandler)
+    participant R as Redis
+    participant W as Worker(WorkerAgent/WorkerHandler)
+    participant N as Netty Channel
+
+    Note over W: 定时心跳(10s)\n带 currentTaskId(来自 WorkerState)
+    W->>N: HEARTBEAT(currentTaskId)
+    N->>M: HEARTBEAT
+    M->>R: SET worker:{workerId}:hb = alive (TTL 30s)
+    alt currentTaskId != ""
+        M->>R: EXPIRE worker:{workerId}:task (TTL 120s)
+        M->>R: EXPIRE task:{taskId}:workerId (TTL 120s)
+    end
+
+    Note over M: 调度开始：选择在线 worker
+    M->>R: keys worker:*:hb
+    M->>R: Lua tryPreemptWorker\nif hb==alive && !exists(worker:{id}:task)\nthen SET worker:{id}:task=taskId EX 120
+    alt 抢占成功
+        M->>R: SET task:{taskId}:workerId = workerId (TTL 120s)
+        M->>N: EXECUTE_TASK(taskId, attempt, traceId)
+        N->>W: EXECUTE_TASK
+        W->>R: persistTaskStart(taskId)\nSETEX worker:{id}:task=taskId (TTL 120s)\nSETEX task:{taskId}:workerId=workerId (TTL 120s)
+        W->>N: EXECUTE_TASK_RESPONSE(accepted=true)
+        N->>M: EXECUTE_TASK_RESPONSE
+        Note over W: 启动训练线程\n持续推送 LOG_DATA / TASK_STATUS_REPORT
+        W->>N: TASK_STATUS_REPORT(COMPLETED/FAILED)
+        N->>M: TASK_STATUS_REPORT
+        W->>R: clearTask(taskId)\nDEL worker:{id}:task\nDEL task:{taskId}:workerId
+        M->>R: DEL worker:{id}:task (兜底清理)
+        M->>R: DEL task:{taskId}:workerId (releaseTaskOwner)
+    else 抢占失败
+        Note over M: worker 忙或不在线\n任务入队/等待
+    end
+```
+
+### 7.4 Worker-Master 交互图（Master 宕机 + 恢复 + Worker 重连）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as Master
+    participant R as Redis
+    participant W as Worker
+
+    Note over W: 任务执行中 / 或准备执行中
+    Note over M: Master 宕机
+
+    alt Master 宕机前已写入部分 Redis key
+        Note over R: 可能存在：\n1) worker:{id}:task=taskId\n2) task:{taskId}:workerId=workerId\n3) worker:{id}:hb(会过期)
+    end
+
+    Note over M: Master 重启
+    M->>R: 扫描 worker:*:task
+    M->>R: 对每个 workerTaskKey 读取 taskId
+    M->>R: 读取 task:{taskId}:workerId
+    alt ownerKey 缺失或不匹配
+        Note over M: 判定为调度中断 / 不一致\n任务回滚到 PENDING 并重新入队
+    else ownerKey 匹配
+        Note over M: 保持 RUNNING\n等待心跳继续续期
+    end
+
+    Note over W: Worker 按指数退避重连
+    W->>M: 重连成功后发送 HEARTBEAT(currentTaskId)
+    M->>R: SET worker:{id}:hb alive (TTL 30s)
+    alt currentTaskId != "" 且 ownerKey 匹配
+        M->>R: EXPIRE worker:{id}:task (TTL 120s)
+        M->>R: EXPIRE task:{taskId}:workerId (TTL 120s)
+        Note over M: 任务继续追踪为 RUNNING
+    else currentTaskId != "" 但 ownerKey 缺失/不匹配
+        Note over M: 判定通知丢失或所有权丢失\n按策略标记 COMPLETED 或重新调度
+    else currentTaskId == ""
+        Note over M: worker 空闲\n尝试派发队列任务
+    end
+```
+
+### 7.5 Redis Key 如何保证“稳定分发”（一致性约束）
+
+```mermaid
+flowchart TB
+    A["选择 worker：从 worker:*:hb 中筛选"] --> B{"Lua tryPreemptWorker<br/>原子检查与占位"}
+    B -->|"hb 存活 且 worker 空闲"| C["SET worker:{id}:task=taskId EX 120<br/>占用 worker 资源"]
+    B -->|"否则"| Z["抢占失败<br/>任务入队/等待"]
+
+    C --> D["SET task:{taskId}:workerId=workerId EX 120<br/>记录任务 owner"]
+    D --> E["Netty 下发 EXECUTE_TASK"]
+    E --> F["Worker 收到任务<br/>persistTaskStart(taskId)"]
+    F --> G["SETEX worker:{id}:task=taskId EX 120<br/>SETEX task:{taskId}:workerId=workerId EX 120<br/>双向写入（缩短时间差）"]
+    G --> H["训练中：心跳续期<br/>续期 hbKey / taskKey / ownerKey"]
+    H --> I{"任务结束？"}
+    I -->|"是"| J["Worker clearTask(taskId)<br/>DEL worker:{id}:task<br/>DEL task:{taskId}:workerId<br/>并上报 TASK_STATUS_REPORT"]
+    J --> K["Master 兜底清理并 releaseTaskOwner<br/>避免残留 key 阻塞调度"]
+    I -->|"否"| H
+```
+
+**核心约束（可以用来理解恢复与一致性判断）**
+
+1. `worker:{workerId}:hb`（30s）表示 Worker 存活；调度只考虑存活 Worker。
+2. `worker:{workerId}:task`（120s）是 Worker “资源占用位”，Lua 抢占保证同一时刻只会被一个任务占用。
+3. `task:{taskId}:workerId`（120s）是任务 owner；用于 Master 恢复时判断任务是否仍有明确归属。
+4. 理想一致性：`worker:{workerId}:task = taskId` ⇔ `task:{taskId}:workerId = workerId`。若出现缺失/不匹配，恢复逻辑将其判定为“调度中断/通知丢失”等异常分支并做纠正（回滚 PENDING/强制 COMPLETED/重新入队）。
+
+***
 
 ## 八、测试用例
 
@@ -641,7 +749,7 @@ void testNoThunderingHerdOnMasterRestart() {
 }
 ```
 
----
+***
 
 ## 九、验证检查清单
 
@@ -660,7 +768,7 @@ void testNoThunderingHerdOnMasterRestart() {
 - [ ] 编译通过（`./mvnw compile`）
 - [ ] 测试通过（`./mvnw test`）
 
----
+***
 
 ## 十、Bug Fix Log（2026-04-11：Worker 重连始终失败）
 
@@ -698,7 +806,7 @@ io.netty.channel.ChannelPipelineException:
 
 Worker 端在 `WorkerAgent.start()` 时只创建了 **一个** `WorkerHandler` 实例，然后每次 `connect()`（包括重连）都会创建 **新的 Channel**，并把同一个 `WorkerHandler` 再次 `addLast` 到新 Channel 的 pipeline。
 
-- Netty 规则：**同一个 handler 实例如果不是 `@Sharable`，不能被添加到多个 pipeline**。
+- Netty 规则：**同一个 handler 实例如果不是** **`@Sharable`，不能被添加到多个 pipeline**。
 - `WorkerHandler` 不是 `@Sharable`，且包含任务状态字段（`currentTaskId / lastTaskId / attempt`），因此复用不仅会触发 Netty 的 multiplicity 保护，也会带来潜在的状态串扰风险。
 
 结果就是：**第 1 次连接可能成功（或失败），但第 2 次及之后的连接在 pipeline 初始化时必然失败**，从而表现为“所有重连尝试都无效”。
@@ -707,9 +815,9 @@ Worker 端在 `WorkerAgent.start()` 时只创建了 **一个** `WorkerHandler` �
 
 修复目标：每次重连都能创建一条“干净的 pipeline”，同时保留 worker 必要的业务状态。
 
-1. **每个 Channel 新建一个 `WorkerHandler`**
+1. **每个 Channel 新建一个** **`WorkerHandler`**
    - 在 `ChannelInitializer.initChannel` 中 `new WorkerHandler(...)`，避免 handler 实例复用。
-2. **抽离跨连接共享状态 `WorkerState`**
+2. **抽离跨连接共享状态** **`WorkerState`**
    - 将 `currentTaskId / lastTaskId / currentAttempt` 从 handler 内移到 `WorkerState`，由：
      - `WorkerAgent` 的心跳/续租定时器读取
      - 每次新建的 `WorkerHandler` 写入
@@ -721,7 +829,7 @@ Worker 端在 `WorkerAgent.start()` 时只创建了 **一个** `WorkerHandler` �
 
 新增测试覆盖两条关键约束：
 
-1. **复用同一个非 `@Sharable` handler 实例到两个 Channel 必然抛异常**
+1. **复用同一个非** **`@Sharable`** **handler 实例到两个 Channel 必然抛异常**
 2. **每个 Channel 新建 handler（即便共享同一个 WorkerState）不会抛异常**
 
 这确保未来重构重连逻辑时，不会再次把 handler 复用引入回来。
@@ -736,3 +844,4 @@ Worker 端在 `WorkerAgent.start()` 时只创建了 **一个** `WorkerHandler` �
    - 更稳定：心跳/续租读取的是 `WorkerState`，不再依赖某一个 handler 实例是否还在使用中。
 4. **master 宕机恢复后 worker 是否能重连**
    - 能：消除了 pipeline 初始化阶段的硬失败点，重连会真正进入“连接成功→稳定期→心跳恢复”的路径。
+

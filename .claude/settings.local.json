@@ -8,7 +8,20 @@
       "Bash(./mvnw clean:*)",
       "Bash(./mvnw help:effective-pom -Doutput=effective-pom.xml)",
       "Bash(curl -s \"https://search.maven.org/solrsearch/select?q=g:org.springframework.boot+AND+a:spring-boot-starter-parent&rows=5&wt=json\")",
-      "Bash(./mvnw help:evaluate -Dexpression=spring-boot.version -q -DforceStdout)"
+      "Bash(./mvnw help:evaluate -Dexpression=spring-boot.version -q -DforceStdout)",
+      "PowerShell(.venv\\\\Scripts\\\\activate; python -c \"import sys; open\\('.graphify_python', 'w'\\).write\\(sys.executable\\)\")",
+      "PowerShell(.venv\\\\Scripts\\\\pip install graphifyy -q 2>&1 | Select-Object -Last 3)",
+      "PowerShell(C:\\\\Users\\\\13253\\\\dataDisk\\\\Agent_AI\\\\AI-Interview\\\\.venv\\\\Scripts\\\\activate; C:\\\\Users\\\\13253\\\\dataDisk\\\\Agent_AI\\\\AI-Interview\\\\.venv\\\\Scripts\\\\python -c \"import sys; open\\('.graphify_python', 'w'\\).write\\(sys.executable\\)\")",
+      "PowerShell(C:\\\\Users\\\\13253\\\\dataDisk\\\\Agent_AI\\\\AI-Interview\\\\.venv\\\\Scripts\\\\python -m pip install graphifyy -q 2>&1 | Select-Object -Last 3)",
+      "PowerShell(python -c \"import sys; print\\(sys.executable\\)\")",
+      "PowerShell(& \"C:\\\\Users\\\\13253\\\\dataDisk\\\\Agent_AI\\\\AI-Interview\\\\.venv\\\\Scripts\\\\Activate.ps1\"; python -c \"import sys; open\\('.graphify_python', 'w'\\).write\\(sys.executable\\)\")",
+      "PowerShell(& \"C:\\\\Users\\\\13253\\\\dataDisk\\\\Agent_AI\\\\AI-Interview\\\\.venv\\\\Scripts\\\\Activate.ps1\"; python -m ensurepip 2>&1 | Select-Object -Last 3)",
+      "PowerShell(& \".venv\\\\Scripts\\\\Activate.ps1\"; python -m ensurepip 2>&1 | Select-Object -Last 3)",
+      "PowerShell(& \".venv\\\\Scripts\\\\Activate.ps1\"; python -m pip install graphifyy -q 2>&1 | Select-Object -Last 3)",
+      "PowerShell(& \".venv\\\\Scripts\\\\Activate.ps1\"; python -c \"import graphify; print\\('graphify imported successfully'\\)\")",
+      "PowerShell(& \".venv\\\\Scripts\\\\Activate.ps1\")",
+      "Bash(python3:*)",
+      "PowerShell(python -c \"with open\\('.graphify_detect.json', 'rb'\\) as f: print\\(repr\\(f.read\\(\\)[:20]\\)\\)\")"
     ]
   }
 }
