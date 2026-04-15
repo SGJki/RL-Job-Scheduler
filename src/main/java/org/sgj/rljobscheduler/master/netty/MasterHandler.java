@@ -11,6 +11,7 @@ import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
 import org.sgj.rljobscheduler.master.service.SchedulerService;
 import org.sgj.rljobscheduler.master.service.LogManager;
+import org.sgj.rljobscheduler.master.service.RedisWorkerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,15 +50,22 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
     @Autowired
     private SchedulerService schedulerService;
 
+    @Autowired
+    private RedisWorkerRegistry workerRegistry;
+
     @Override
     public void channelActive(ChannelHandlerContext ctx) throws Exception {
         LOG.info(">>> 有新的 Worker 连接: {}", ctx.channel().remoteAddress());
+        // Worker registration happens in handleHeartbeat() when workerId is first received
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-        // TODO: 从 ChannelManager 中移除，但这需要知道 workerId
-        // 可以在处理心跳时绑定属性到 Channel
+        String workerId = ctx.channel().attr(WORKER_ID_KEY).get();
+        if (workerId != null) {
+            channelManager.unregister(workerId);
+            workerRegistry.unregister(workerId);
+        }
         LOG.info(">>> Worker 连接断开: {}", ctx.channel().remoteAddress());
     }
 

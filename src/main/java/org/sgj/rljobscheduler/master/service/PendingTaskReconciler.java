@@ -3,6 +3,7 @@ package org.sgj.rljobscheduler.master.service;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
+import org.sgj.rljobscheduler.master.service.RedisWorkerRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -18,6 +19,7 @@ public class PendingTaskReconciler {
     private final TrainingTaskMapper taskMapper;
     private final SchedulerService schedulerService;
     private final StringRedisTemplate redisTemplate;
+    private final RedisWorkerRegistry workerRegistry;
 
     @Value("${scheduler.reconcile.enabled:true}")
     private boolean enabled;
@@ -28,11 +30,13 @@ public class PendingTaskReconciler {
     public PendingTaskReconciler(
             TrainingTaskMapper taskMapper,
             SchedulerService schedulerService,
-            StringRedisTemplate redisTemplate
+            StringRedisTemplate redisTemplate,
+            RedisWorkerRegistry workerRegistry
     ) {
         this.taskMapper = taskMapper;
         this.schedulerService = schedulerService;
         this.redisTemplate = redisTemplate;
+        this.workerRegistry = workerRegistry;
     }
 
     @Scheduled(fixedDelayString = "${scheduler.reconcile.fixed-delay-ms:2000}")
@@ -66,18 +70,13 @@ public class PendingTaskReconciler {
     }
 
     private List<String> findIdleWorkers() {
-        Set<String> workerKeys = redisTemplate.keys("worker:*:hb");
-        if (workerKeys == null || workerKeys.isEmpty()) {
+        Set<String> workerIds = workerRegistry.getActiveWorkerIds();
+        if (workerIds == null || workerIds.isEmpty()) {
             return List.of();
         }
 
         List<String> idle = new ArrayList<>();
-        for (String key : workerKeys) {
-            String[] parts = key.split(":");
-            if (parts.length < 3) {
-                continue;
-            }
-            String workerId = parts[1];
+        for (String workerId : workerIds) {
             String taskKey = "worker:" + workerId + ":task";
             Boolean busy = redisTemplate.hasKey(taskKey);
             if (busy == null || !busy) {

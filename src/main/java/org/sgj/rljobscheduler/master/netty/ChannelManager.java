@@ -1,6 +1,8 @@
 package org.sgj.rljobscheduler.master.netty;
 
 import io.netty.channel.Channel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
@@ -12,6 +14,8 @@ import java.util.concurrent.ConcurrentHashMap;
 @Component
 public class ChannelManager {
 
+    private static final Logger LOG = LoggerFactory.getLogger(ChannelManager.class);
+
     // workerId -> Channel
     private final Map<String, Channel> workerChannels = new ConcurrentHashMap<>();
 
@@ -21,6 +25,7 @@ public class ChannelManager {
 
     public void unregister(String workerId) {
         workerChannels.remove(workerId);
+        LOG.info(">>> ChannelManager: Worker [{}] 已移除", workerId);
     }
 
     public Channel getChannel(String workerId) {

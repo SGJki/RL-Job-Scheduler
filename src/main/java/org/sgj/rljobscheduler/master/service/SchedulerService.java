@@ -8,6 +8,7 @@ import org.sgj.rljobscheduler.common.proto.ExecuteTaskRequest;
 import org.sgj.rljobscheduler.master.entity.TrainingTask;
 import org.sgj.rljobscheduler.master.netty.ChannelManager;
 import org.sgj.rljobscheduler.master.mapper.TrainingTaskMapper;
+import org.sgj.rljobscheduler.master.service.RedisWorkerRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -47,6 +48,9 @@ public class SchedulerService {
     @Autowired
     private SimpMessagingTemplate messagingTemplate;
 
+    @Autowired
+    private RedisWorkerRegistry workerRegistry;
+
     @Value("${scheduler.queue.enabled:false}")
     private boolean queueEnabled;
 
@@ -69,15 +73,14 @@ public class SchedulerService {
             redisTemplate.opsForValue().set(taskTraceKey(task.getId()), effectiveTraceId, 1, TimeUnit.DAYS);
 
             // 1. 获取所有在线 Worker
-            Set<String> workerKeys = redisTemplate.keys("worker:*:hb");
-            if (workerKeys == null || workerKeys.isEmpty()) {
+            Set<String> workerIds = workerRegistry.getActiveWorkerIds();
+            if (workerIds == null || workerIds.isEmpty()) {
                 LOG.warn(">>> 没有在线的 Worker，无法调度任务: {}", task.getId());
                 enqueueIfEnabled(task.getId());
                 return false;
             }
 
-            for (String key : workerKeys) {
-                String workerId = key.split(":")[1];
+            for (String workerId : workerIds) {
                 
                 // 2. 尝试抢占 (Lua 脚本保证原子性)
                 if (tryPreemptWorker(workerId, task.getId())) {
