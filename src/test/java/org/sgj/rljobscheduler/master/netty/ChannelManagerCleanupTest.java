@@ -19,6 +19,13 @@ class ChannelManagerCleanupTest {
     private Channel inactiveChannel;
 
     @Test
+    void register_storesChannelByWorkerId() {
+        ChannelManager manager = new ChannelManager();
+        manager.register("worker-1", activeChannel);
+        assertThat(manager.getChannel("worker-1")).isEqualTo(activeChannel);
+    }
+
+    @Test
     void unregister_removesChannelAndReturnsNull() {
         ChannelManager manager = new ChannelManager();
         manager.register("worker-1", activeChannel);
