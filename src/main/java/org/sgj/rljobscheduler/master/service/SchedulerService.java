@@ -38,6 +38,24 @@ public class SchedulerService {
     private static final String DEFAULT_TASK_WORKER_SUFFIX = ":workerId";
     private static final String DEFAULT_TASK_ATTEMPT_SUFFIX = ":currentAttempt";
 
+    private static final DefaultRedisScript<Long> PREEMPT_ANY_SCRIPT;
+
+    static {
+        String script =
+            "local taskId = ARGV[1]\n" +
+            "local n = #KEYS / 2\n" +
+            "for i = 0, n - 1 do\n" +
+            "  local hbKey = KEYS[2*i+1]\n" +
+            "  local taskKey = KEYS[2*i+2]\n" +
+            "  if redis.call('get', hbKey) == 'alive' and redis.call('exists', taskKey) == 0 then\n" +
+            "    redis.call('set', taskKey, taskId, 'EX', 120)\n" +
+            "    return (i + 1)\n" +
+            "  end\n" +
+            "end\n" +
+            "return 0\n";
+        PREEMPT_ANY_SCRIPT = new DefaultRedisScript<>(script, Long.class);
+    }
+
     @Autowired
     private StringRedisTemplate redisTemplate;
 
@@ -186,8 +204,7 @@ public class SchedulerService {
             }
 
             // Check if already assigned
-            String ownerKey = "task:" + taskId + ":workerId";
-            String ownerWorkerId = redisTemplate.opsForValue().get(ownerKey);
+            String ownerWorkerId = redisTemplate.opsForValue().get(taskWorkerKey(taskId));
             if (ownerWorkerId != null) {
                 redisTemplate.opsForSet().remove(queueSetKey, taskId);
                 continue;
@@ -331,28 +348,14 @@ public class SchedulerService {
         List<String> workerIdList = new ArrayList<>(workerIds);
 
         // Build KEYS list in the SAME order as workerIdList
-        List<String> keys = new java.util.ArrayList<>();
+        List<String> keys = new ArrayList<>();
         for (String workerId : workerIdList) {
             keys.add("worker:" + workerId + ":hb");    // KEYS[2*i]
             keys.add("worker:" + workerId + ":task");   // KEYS[2*i+1]
         }
 
         // Single Lua script: iterate all pairs, return 1-based index of first winner
-        String script =
-            "local taskId = ARGV[1]\n" +
-            "local n = #KEYS / 2\n" +
-            "for i = 0, n - 1 do\n" +
-            "  local hbKey = KEYS[2*i+1]\n" +
-            "  local taskKey = KEYS[2*i+2]\n" +
-            "  if redis.call('get', hbKey) == 'alive' and redis.call('exists', taskKey) == 0 then\n" +
-            "    redis.call('set', taskKey, taskId, 'EX', 120)\n" +
-            "    return (i + 1)\n" +
-            "  end\n" +
-            "end\n" +
-            "return 0\n";
-
-        DefaultRedisScript<Long> redisScript = new DefaultRedisScript<>(script, Long.class);
-        Long result = redisTemplate.execute(redisScript, keys, taskId);
+        Long result = redisTemplate.execute(PREEMPT_ANY_SCRIPT, keys, taskId);
 
         if (result == null || result == 0) {
             return null;

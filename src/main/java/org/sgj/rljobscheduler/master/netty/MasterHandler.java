@@ -116,12 +116,9 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
             redisTemplate.expire(taskKey, 120, TimeUnit.SECONDS);
             schedulerService.renewTaskOwnerTtl(currentTaskId);
         } else {
-            // currentTaskId 为空 → Worker 空闲
-            checkAndFixStaleRunningTasks(workerId);
-            // Immediately try to dispatch queued tasks to this specific worker
+            // currentTaskId 为空 → Worker 空闲，尝试分发排队任务
             boolean dispatched = schedulerService.tryDispatchQueuedTaskToWorker(workerId);
             if (!dispatched) {
-                // Worker has no task — try draining from shared queue with any idle worker
                 schedulerService.dispatchOneFromQueueToAnyIdleWorker();
             }
         }
@@ -129,16 +126,6 @@ public class MasterHandler extends SimpleChannelInboundHandler<NettyMessage> {
         // 记录 Worker 元数据 (可选)
         String metaKey = "worker:" + workerId + ":meta";
         redisTemplate.opsForValue().set(metaKey, String.format("GPUs:%d, CPU:%.2f", req.getAvailableGpus(), req.getCpuUsage()));
-    }
-
-    /**
-     * Check for tasks that were marked RUNNING on this worker but never completed.
-     * Finds taskIds stored in Redis under "task:<taskId>:workerId" where workerId matches
-     * but the worker has no current task (idle heartbeat).  Marks stale tasks FAILED.
-     */
-    private void checkAndFixStaleRunningTasks(String workerId) {
-        // No-op stub — stale task recovery is handled by PendingTaskReconciler
-        // and by handleStatusReport on task completion/failure.
     }
 
     private void handleTaskResponse(ExecuteTaskResponse resp) {
