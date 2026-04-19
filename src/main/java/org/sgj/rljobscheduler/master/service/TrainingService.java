@@ -18,7 +18,6 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 
@@ -41,25 +40,23 @@ public class TrainingService {
      */
     @Loggable(level = Loggable.LogLevel.INFO, logParams = true, logExecutionTime = true)
     public TrainingResult startTraining(TrainingRequest request, Long userId, String traceId) {
-        // 1. 生成任务 ID 并保存到数据库
-        String taskId = UUID.randomUUID().toString().substring(0, 8);
-
+        // 1. 创建任务并保存到数据库（ID 由数据库自增生成）
         int episodes = (request.getEpisodes() == null) ? 0 : request.getEpisodes();
         double learningRate = (request.getLearningRate() == null) ? 0.1 : request.getLearningRate();
 
-        TrainingTask task = new TrainingTask(taskId, request.getAlgorithm(),
-                episodes, learningRate);
+        TrainingTask task = new TrainingTask(request.getAlgorithm(), episodes, learningRate);
         task.setUserId(userId);
         task.setStatus("PENDING");
 
-        // 存库!
+        // 存库！插入后 MyBatis-Plus 会自动回填自增 ID
         taskMapper.insert(task);
+        Long taskId = task.getId();
 
-        initTaskLogWithTraceId(taskId, traceId);
+        initTaskLogWithTraceId(String.valueOf(taskId), traceId);
 
         // 2. 尝试分布式调度
         boolean scheduled = schedulerService.scheduleTask(task, traceId);
-        
+
         if (scheduled) {
             // 更新数据库状态为 RUNNING
             task.setStatus("RUNNING");
@@ -69,10 +66,10 @@ public class TrainingService {
             // 推送 WebSocket 状态更新
             messagingTemplate.convertAndSend("/topic/tasks", task);
 
-            return new TrainingResult(taskId, "RUNNING", 0, "Task scheduled to worker...","None");
+            return new TrainingResult(taskId, "RUNNING", 0, "Task scheduled to worker...", "None");
         } else {
             LOG.warn(">>> [TrainingService] 任务调度失败，保持 PENDING: {}", taskId);
-            return new TrainingResult(taskId, "PENDING", 0, "No available worker, task queued...","None");
+            return new TrainingResult(taskId, "PENDING", 0, "No available worker, task queued...", "None");
         }
     }
 

@@ -23,7 +23,8 @@
       "Bash(python3:*)",
       "PowerShell(python -c \"with open\\('.graphify_detect.json', 'rb'\\) as f: print\\(repr\\(f.read\\(\\)[:20]\\)\\)\")",
       "Bash(git add:*)",
-      "Bash(git commit -m ':*)"
+      "Bash(git commit -m ':*)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }

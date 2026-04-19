@@ -3,27 +3,19 @@ package org.sgj.rljobscheduler.master.entity;
 
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.IdType;
 
 import java.time.LocalDateTime;
 
 /**
  * 实体类 (Entity)
  * 对应数据库中的一张表 "training_task"
- *
- * JPA 会自动根据这个类创建表结构：
- * CREATE TABLE training_task (
- *   id VARCHAR(255) PRIMARY KEY,
- *   algorithm VARCHAR(255),
- *   status VARCHAR(255),
- *   ...
- * )
  */
-
 @TableName("training_task")
 public class TrainingTask {
 
-    @TableId
-    private String id; // 任务 ID (主键)
+    @TableId(type = IdType.AUTO)
+    private Long id; // 任务 ID (主键)，数据库自增
 
     private String algorithm;
     private int episodes;
@@ -39,8 +31,7 @@ public class TrainingTask {
     // 必须有无参构造函数
     public TrainingTask() {}
 
-    public TrainingTask(String id, String algorithm, int episodes, double learningRate) {
-        this.id = id;
+    public TrainingTask(String algorithm, int episodes, double learningRate) {
         this.algorithm = algorithm;
         this.episodes = episodes;
         this.learningRate = learningRate;
@@ -50,8 +41,8 @@ public class TrainingTask {
     }
 
     // Getters and Setters
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }

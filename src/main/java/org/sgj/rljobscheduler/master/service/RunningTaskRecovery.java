@@ -59,11 +59,11 @@ public class RunningTaskRecovery {
         }
 
         for (TrainingTask task : running) {
-            if (task == null || task.getId() == null || task.getId().isBlank()) {
+            if (task == null || task.getId() == null) {
                 continue;
             }
 
-            String taskId = task.getId();
+            String taskId = String.valueOf(task.getId());
             String workerId = redisTemplate.opsForValue().get(taskWorkerKey(taskId));
             if (workerId == null || workerId.isBlank()) {
                 // task:{taskId}:workerId 不存在 → Master 在调度前或调度期间宕机，任务从未真正开始

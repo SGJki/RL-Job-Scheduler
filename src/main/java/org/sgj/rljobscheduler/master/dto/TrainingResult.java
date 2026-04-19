@@ -7,14 +7,14 @@ import java.time.LocalDateTime;
  * 返回给前端的数据
  */
 public class TrainingResult {
-    private String taskId;
+    private Long taskId;
     private String status;
     private double finalReward;
     private String completedAt;
     private String message;
     private String errormessage;
 
-    public TrainingResult(String taskId, String status, double finalReward, String message, String errorMessage) {
+    public TrainingResult(Long taskId, String status, double finalReward, String message, String errorMessage) {
         this.taskId = taskId;
         this.status = status;
         this.finalReward = finalReward;
@@ -24,7 +24,7 @@ public class TrainingResult {
     }
 
     // Getters
-    public String getTaskId() { return taskId; }
+    public Long getTaskId() { return taskId; }
     public String getStatus() { return status; }
     public double getFinalReward() { return finalReward; }
     public String getCompletedAt() { return completedAt; }

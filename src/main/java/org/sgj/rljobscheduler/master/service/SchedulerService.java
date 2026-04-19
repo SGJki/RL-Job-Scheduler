@@ -140,30 +140,30 @@ public class SchedulerService {
     public boolean scheduleTask(TrainingTask task, String traceId) {
         try {
             String effectiveTraceId = (traceId == null || traceId.isBlank()) ? "unknown" : traceId;
-            redisTemplate.opsForValue().set(taskTraceKey(task.getId()), effectiveTraceId, 1, TimeUnit.DAYS);
+            redisTemplate.opsForValue().set(taskTraceKey(String.valueOf(task.getId())), effectiveTraceId, 1, TimeUnit.DAYS);
 
             // 1. 获取所有在线 Worker
             Set<String> workerIds = workerRegistry.getActiveWorkerIds();
             if (workerIds == null || workerIds.isEmpty()) {
                 LOG.warn(">>> 没有在线的 Worker，无法调度任务: {}", task.getId());
-                enqueueIfEnabled(task.getId());
+                enqueueIfEnabled(String.valueOf(task.getId()));
                 return false;
             }
 
-            String winnerId = tryPreemptAnyWorker(task.getId());
+            String winnerId = tryPreemptAnyWorker(String.valueOf(task.getId()));
             if (winnerId != null) {
-                registerTaskOwner(winnerId, task.getId());
+                registerTaskOwner(winnerId, String.valueOf(task.getId()));
                 // 抢占成功，通过 Netty 下发任务
                 return dispatchTask(winnerId, task, effectiveTraceId);
             }
 
             LOG.warn(">>> 所有在线 Worker 均在运行中，任务进入等待队列: {}", task.getId());
-            enqueueIfEnabled(task.getId());
+            enqueueIfEnabled(String.valueOf(task.getId()));
             return false;
         } catch (Exception e) {
             LOG.error(">>> [SchedulerService] 调度异常 (可能是 Redis 未启动或连接失败): {}", e.getMessage());
             // 调度失败，返回 false，让任务保持 PENDING 状态
-            enqueueIfEnabled(task.getId());
+            enqueueIfEnabled(String.valueOf(task.getId()));
             return false;
         }
     }
@@ -423,13 +423,13 @@ public class SchedulerService {
             LOG.error(">>> Worker [{}] 已掉线，抢占失败", workerId);
             // 清理已设置的任务 Key
             redisTemplate.delete("worker:" + workerId + ":task");
-            releaseTaskOwner(task.getId());
+            releaseTaskOwner(String.valueOf(task.getId()));
             return false;
         }
 
-        int attempt = allocateAttempt(task.getId());
+        int attempt = allocateAttempt(String.valueOf(task.getId()));
         ExecuteTaskRequest req = ExecuteTaskRequest.newBuilder()
-                .setTaskId(task.getId())
+                .setTaskId(String.valueOf(task.getId()))
                 .setAlgorithm(task.getAlgorithm())
                 .setEpisodes(task.getEpisodes())
                 .setLearningRate(task.getLearningRate())
