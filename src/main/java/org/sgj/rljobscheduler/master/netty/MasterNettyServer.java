@@ -10,6 +10,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
+import io.netty.util.concurrent.RejectedExecutionHandlers;
 import org.sgj.rljobscheduler.common.netty.MessageDecoder;
 import org.sgj.rljobscheduler.common.netty.MessageEncoder;
 import org.slf4j.Logger;
@@ -51,7 +52,7 @@ public class MasterNettyServer {
         }
         new Thread(() -> {
             bossGroup = new NioEventLoopGroup(1);
-            bizGroup = new DefaultEventExecutorGroup(16);
+            bizGroup = new DefaultEventExecutorGroup(16,null,1000, RejectedExecutionHandlers.reject());
             workerGroup = new NioEventLoopGroup();
             try {
                 ServerBootstrap b = new ServerBootstrap();
