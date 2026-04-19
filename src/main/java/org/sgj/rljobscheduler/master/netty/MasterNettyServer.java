@@ -8,6 +8,8 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.EventExecutorGroup;
 import org.sgj.rljobscheduler.common.netty.MessageDecoder;
 import org.sgj.rljobscheduler.common.netty.MessageEncoder;
 import org.slf4j.Logger;
@@ -39,6 +41,7 @@ public class MasterNettyServer {
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
+    private EventExecutorGroup bizGroup;
 
     @PostConstruct
     public void start() {
@@ -48,6 +51,7 @@ public class MasterNettyServer {
         }
         new Thread(() -> {
             bossGroup = new NioEventLoopGroup(1);
+            bizGroup = new DefaultEventExecutorGroup(16);
             workerGroup = new NioEventLoopGroup();
             try {
                 ServerBootstrap b = new ServerBootstrap();
@@ -60,7 +64,7 @@ public class MasterNettyServer {
                             public void initChannel(SocketChannel ch) {
                                 ch.pipeline().addLast(new MessageDecoder());
                                 ch.pipeline().addLast(new MessageEncoder());
-                                ch.pipeline().addLast(masterHandler);
+                                ch.pipeline().addLast(bizGroup, masterHandler);
                             }
                         });
 
@@ -77,6 +81,7 @@ public class MasterNettyServer {
 
     @PreDestroy
     public void stop() {
+        if (bizGroup != null) bizGroup.shutdownGracefully();
         if (bossGroup != null) bossGroup.shutdownGracefully();
         if (workerGroup != null) workerGroup.shutdownGracefully();
     }
