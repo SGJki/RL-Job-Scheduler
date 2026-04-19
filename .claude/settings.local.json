@@ -21,7 +21,9 @@
       "PowerShell(& \".venv\\\\Scripts\\\\Activate.ps1\"; python -c \"import graphify; print\\('graphify imported successfully'\\)\")",
       "PowerShell(& \".venv\\\\Scripts\\\\Activate.ps1\")",
       "Bash(python3:*)",
-      "PowerShell(python -c \"with open\\('.graphify_detect.json', 'rb'\\) as f: print\\(repr\\(f.read\\(\\)[:20]\\)\\)\")"
+      "PowerShell(python -c \"with open\\('.graphify_detect.json', 'rb'\\) as f: print\\(repr\\(f.read\\(\\)[:20]\\)\\)\")",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }
